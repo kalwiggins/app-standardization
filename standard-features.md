@@ -1,4 +1,4 @@
-# Epic Design Labs — Standard Features (v3.1)
+# Epic Design Labs — Standard Features (v3.2)
 
 **Canonical reference** for the foundational features every Epic Design Labs app should have. New apps adopt this whole stack so users get a consistent experience — same login, same org model, same affiliate program, same support widget — across the whole portfolio.
 
@@ -21,6 +21,28 @@
 - 📋 **Proposed** — New in v3; not yet implemented anywhere
 
 **Reference implementation:** Foundry IMS (api: `Epic-Design-Labs/app-foundry-ims-api`, admin: `app-foundry-ims-admin`, marketing: `astro-foundryims`). Foundry is the most current implementation; if you find a better pattern, propose a standard update rather than diverging silently.
+
+### Changes in v3.2
+
+Incorporates feedback from the Dispatch team's review of v3. Most changes are clarifications or new subsections; a few concerns get explicit "this is the trade-off we're accepting" treatment because the underlying intent is confirmed:
+
+- **§23 Throttle clarity** — explicit phase / ETA / "do not depend on Throttle for blocking design decisions yet" callout. Customer-to-org mapping locked in: one Throttle customer per org, Org→Throttle one-way provisioning, two sources of truth (Clerk identity, Throttle billing) instead of three.
+- **§6 per-org affiliate trade-offs** — explicit table of trade-offs and mitigations: optional `Referral.sharedByUserId` snapshot for internal "shared by Sarah" attribution, cascade-delete on referrer org closure with warning in close dialog, multi-user sharing intentionally out of scope at MVP.
+- **§7 race-to-create prospect-side guards** — partner trial creation rate-limited per §22, conflict warning (`409 pending_trial_exists`) when a pending Referral already exists for the prospect's email, abandoned-org cleanup after 14 days of no client login, consolidated invitation email when multiple partners force-create.
+- **§7 white-label legal flag** — discount-vs-commission accounting treatment is pending legal review; specifics may evolve.
+- **§3.4 query/security guidance** — common queries with non-unique `clerkUserId`, including the lint principle that `find*` on `User` without `orgId` is a tenancy bug.
+- **§14.5 audit-log + tombstone legal note** — pseudonymous userId retention basis (Art. 6.1.c / 6.1.f), region-specific deletion may demand stricter handling.
+- **§17.5 cron concurrency** — Postgres advisory lock or Redis SETNX requirement, idempotency on top of locking.
+- **§9 / §1 email-templates clarification** — `@epic/email-templates` = shared components (header / footer / button / layout); per-app `src/emails/` = full templates that compose them.
+- **§21.12 lint tooling realism** — `@epic/prisma-tenancy-lint` flagged as 🧭 not built; PR review is the enforcement mechanism today.
+- **§2 Foundry audit checklist additions** — per-user → per-org affiliate migration, smooth-signup migration, Throttle migration, backup runbook, 7-year audit cold-storage, `SENTRY_RELEASE` → `APP_VERSION` rename.
+- **§12 webhook truncation flag** — `X-Epic-Truncated: true` header (not body) so customers can branch before parsing JSON.
+- **§14.5 routing rule** — events go to ActivityLog OR AuditLog, not both.
+- **§18 cookie consent** — affiliate cookie pending legal sign-off; treat as consent-required for EU traffic until that lands.
+- **§3.3 disposable email override** — per-domain mechanism, AuditLog entry, optional expiry. Specifies what was previously hand-wave.
+- **§17.5 API path prefix** — clarified that all endpoint examples elsewhere in the doc are implicitly under `/api/v1/`.
+- **§7 commission no-cap intentional** — explicit treatment of the trade-off and why we're accepting it (partner's long-term commitment to client success aligns better than capped models).
+- **§21.10** — reconciled with §16: "demotion takes effect within seconds, not at session expiry" (was "immediately," which contradicted the documented 5-30s cache TTL).
 
 ### Changes in v3.1
 
@@ -67,7 +89,7 @@ A person referring or filing a support ticket in two apps will use two different
 
 This isolation has a real cost — N apps × Clerk plan × Resend workspace × Sentry project × root domain × email warm-up. We accept that cost because cross-app identity at the architecture layer is a much harder problem than it looks, and the per-app model lets each app evolve independently. New apps adopt the same *pattern*, not a shared backend.
 
-The exceptions are **shared libraries** (e.g., `@epic/disposable-emails`, `@epic/sentry-config`, `@epic/email-templates`), which are fine — those are dev dependencies, not runtime services.
+The exceptions are **shared libraries** (e.g., `@epic/disposable-emails`, `@epic/sentry-config`, `@epic/email-templates`), which are fine — those are dev dependencies, not runtime services. (`@epic/email-templates` is the shared component layer — header / footer / button / layout. Full templates live per-app in `src/emails/` and compose those components — see §9.)
 
 ---
 
@@ -110,13 +132,22 @@ The exceptions are **shared libraries** (e.g., `@epic/disposable-emails`, `@epic
 ### Foundry audit checklist (work to align reference impl with v3)
 
 - [ ] Drop `User.clerkUserId @unique` constraint, add `@@index([clerkUserId])` to support multi-org users
-- [ ] Verify `Referral.referrerUserId` references local `User.id` (not Clerk ID)
-- [ ] Migrate `ActivityLog.createdBy` from email to userId (with backfill for departed users)
-- [ ] Add `support.read/write`, `affiliate.read`, `apikeys.manage`, `activity.read`, `export.run`, `notifications.manage` as named permissions per §4 baseline
+- [ ] Make `User.email`, `User.name`, `User.clerkUserId` nullable for tombstoning per §3.4
+- [ ] Migrate per-user `User.affiliateCode` to per-org `Organization.affiliateCode` (schema + data migration + customer comms if old codes are in circulation)
+- [ ] Verify `Referral.referrerOrgId` references local `Organization.id` (not Clerk ID, not user-keyed)
+- [ ] Migrate `ActivityLog.createdBy` from email to userId (with backfill for departed users — orphan emails map to `null` or a `"deleted_user"` literal)
+- [ ] Add `support.read/write`, `affiliate.read`, `apikeys.manage`, `activity.read`, `audit.read`, `export.run`, `notifications.manage`, `webhooks.manage` as named permissions per §4 baseline
 - [ ] Add `permission_changed` 401 emission on session role mismatch per §16
-- [ ] Add per-method notification preferences (bell/toast/email per category) per §11
-- [ ] Migrate transactional emails to `react-email` per §9
+- [ ] Add per-method notification preferences (bell/toast/email per category) + `deliveryClass` field per §11
+- [ ] Migrate transactional emails to `react-email` (current PO send/follow-up are inline HTML strings) per §9
 - [ ] Adopt `@epic/sentry-config` with PII redaction per §17
+- [ ] Rename `SENTRY_RELEASE` env var to `APP_VERSION` per §17
+- [ ] Implement smooth-signup auto-create-org flow per §3.2 (currently relies on Clerk's hosted org-selection screen)
+- [ ] Migrate from current billing (whatever is in place) to Throttle once Throttle ships per §23
+- [ ] Build backup runbook documenting 30-day expiry + deletion-rerun-on-restore per §15.2
+- [ ] Set up 7-year audit-log cold-storage infrastructure per §14.5
+- [ ] Convert Stackbe → fully-on-Clerk for any features still routing through Stackbe (feature requests was the last remaining one as of v3.1)
+- [ ] PR-review enforcement of tenancy-scoped queries until `@epic/prisma-tenancy-lint` ships per §21.12
 - [ ] Full schema audit before v3 ratification
 
 ---
@@ -152,7 +183,7 @@ Every app blocks signups from known disposable email providers using the **`disp
 
 - Reject the signup with a clear error message: **"We don't allow signups with temporary or disposable email addresses. Please use your real email."**
 - Log the attempt to Sentry at `info` severity (per §17 — the disposable email block is a signal, not an error).
-- Soft-block: a CSR can override for legitimate cases (some businesses route via Mailinator-style services for testing).
+- **CSR override is per-domain**, not per-email — granting `mailinator.com` access opens it for everyone using that domain. UI lives in an admin-only Settings page (`/admin/disposable-overrides` or equivalent). Each override row carries: `domain`, `addedBy` (User.id), `reason`, `createdAt`, optional `expiresAt`. Override creation/removal writes an `auth.disposable_override` entry to the AuditLog (§14.5). This makes overrides explicit, time-bound by default, and auditable — not informal Slack favors.
 
 ### 3.4 Local schema mirror
 
@@ -205,6 +236,11 @@ enum UserRole {
 **Schema notes:**
 
 - `User.clerkUserId` is **indexed but NOT unique**. A Clerk user that's a member of three orgs has three local `User` rows, all with the same `clerkUserId`. A `@unique` constraint blocks this. (Evident hit this exact bug during their migration.)
+- **Query implications** of non-unique `clerkUserId`:
+  - `findUnique({ where: { clerkUserId } })` no longer works — use `findFirst({ where: { clerkUserId, orgId } })` for the active-org row, or `findMany({ where: { clerkUserId } })` for cross-org operations.
+  - **Permission checks must scope by `(clerkUserId, orgId)`** — not `clerkUserId` alone. A query that filters only by `clerkUserId` will return rows from other orgs and leak permissions across tenants.
+  - **Cross-org operations** (GDPR sweep, "log this user out everywhere", "list this person's memberships") use `findMany({ where: { clerkUserId } })` and iterate.
+  - **Lint principle (per §21.12):** any `find*` on `User` that doesn't include `orgId` in the where-clause is treated as a tenancy bug unless explicitly annotated as a cross-org operation.
 - `User.email`, `User.name`, `User.clerkUserId` are **nullable** to support GDPR tombstoning (§15). PII is nulled on deletion; the row itself survives so foreign keys keep working. **Migration note:** apps that started with `email String` (required) — including Foundry — need an audited `ALTER TABLE` to make these columns nullable. The `@@unique([orgId, email])` constraint continues to work; Postgres allows multiple NULLs in unique constraints by default.
 - The shift from per-user to per-org affiliate codes is locked in for v3. The `User.affiliateCode` field is reserved for migration only.
 
@@ -368,11 +404,23 @@ Both types log in identically. Partner is a role, not a separate auth system.
 
 Both paths share the same commission rate. **The differentiator is partner status** — partners get the dashboard, the "Create Trial" button, and the partner seat in client orgs. Partner referrals require the partner to physically create the trial (action is proof of attribution); affiliate referrals attribute via shared link.
 
+### Trade-offs of per-org codes (and how to mitigate)
+
+The shift from per-user to per-org affiliate codes is locked in. It's the right call for B2B context but creates real trade-offs worth naming explicitly:
+
+| Concern | Resolution |
+|---|---|
+| **Sarah at Acme tweets her org's link → credit goes to Acme, not Sarah personally** | True. Per-org is the right primitive for B2B (commissions show up on Acme's invoice, not as 1099 income to Sarah). For solo founders / individual users this is a non-issue (they *are* their org). For multi-user orgs, internal kickback is Acme's policy to set, not ours to enforce. |
+| **Multi-user "who shared the link?" attribution** | Optional snapshot field: `Referral.sharedByUserId String?` records which user's session captured the `?r=` click. UI can say "shared by Sarah" while commission still accrues to Acme. Anonymized to `null` on user deletion (PII tombstoning). Apps may surface this in their Settings → Affiliate UI; mandatory if the app's customers ask for internal attribution. |
+| **Partner-as-individual is awkward** | Solo partners are already an org of one — they get the dashboard and commissions on the org. The schema doesn't change; their "personal" referrals and "partner" referrals both write to the same `Organization.affiliateCode`. |
+| **Abandoned / closed referrer org** | `Referral.referrerOrgId` is a foreign key with `onDelete: Cascade`. When a referrer org closes, their open Referral rows cascade-delete and commissions stop. This is intentional — paying out to a closed org is operationally messy (no payout method, no contact). Closing an org with active referral commissions surfaces a warning in the close dialog: "You have $X in open referral commissions; closing forfeits future payouts on N referred orgs." |
+| **5 people in an org share one link, only 1 actually distributes it** | Out of scope for v1. The org is the unit of credit; the org decides internally. If apps need granular attribution they can opt into the `sharedByUserId` snapshot above. |
+
 ### Standardized affiliate rules
 
 These rules apply to every app:
 
-1. **One affiliate code per organization.** Any user with `affiliate.read` (which all roles have) can see their org's code, share it, and view commission stats. Multiple users in the same org share one code; commissions accrue to the org, not to individual users.
+1. **One affiliate code per organization.** Any user with `affiliate.read` (which all roles have) can see their org's code, share it, and view commission stats. Multiple users in the same org share one code; commissions accrue to the org, not to individual users. (See trade-offs above.)
 
 2. **Last-touch attribution wins.** If a prospect clicks two different affiliate links in the 30-day cookie window, the most recent code overwrites the earlier one. This is a deliberate trade-off: simpler than first-touch, aligned with industry standard, but unfair to top-of-funnel educators who may lose credit to bottom-of-funnel coupon sites. Pricing the affiliate tier at 10% with no cap is intended to keep both kinds of partners engaged.
 
@@ -389,6 +437,7 @@ model Referral {
   referredOrgId   String    @unique                   // local Org id; one credit per signup
   referralType    String    @default("affiliate")     // "affiliate" | "direct"
   affiliateCode   String                              // snapshot at attribution time
+  sharedByUserId  String?                             // optional: which user shared the link (for internal attribution UI). Anonymized to null on user delete.
 
   status          String    @default("pending")       // pending | active | converted | expired
   rewardStatus    String    @default("pending")       // pending | paid | ineligible
@@ -396,13 +445,15 @@ model Referral {
   createdAt       DateTime  @default(now())
   convertedAt     DateTime?
 
-  referrerOrg     Organization @relation("ReferrerOrg", fields: [referrerOrgId], references: [id])
+  referrerOrg     Organization @relation("ReferrerOrg", fields: [referrerOrgId], references: [id], onDelete: Cascade)
   referredOrg     Organization @relation("ReferredOrg", fields: [referredOrgId], references: [id], onDelete: Cascade)
 
   @@index([referrerOrgId])
   @@index([affiliateCode])
 }
 ```
+
+`referrerOrg` cascade-deletes when the referrer org closes — see trade-offs table above.
 
 **Schema fix from v2:** `Referral.referrerOrgId` is a local `Organization.id`, not a Clerk ID. (v2 had `referrerUserId` referencing a Clerk user ID, which is unstable across instance recreation and breaks GDPR deletion.)
 
@@ -606,8 +657,10 @@ The partner pays the subscription fee on the client's behalf as part of an all-i
 
 - Partner stays as `OWNER` of the client org.
 - Partner's payment method is on file in Throttle.
-- **Partner receives a 10% white-label discount on the bill** — netted at source, not paid out as commission. (Earlier drafts described this as a self-paid commission; that route creates a 1099 / tax-form gross-up problem where the partner reports income they're really just netting against an expense. Discount-at-source delivers identical economics with cleaner accounting.) Throttle invoices the partner at 90% of list price for white-label-mode subscriptions.
+- **Partner receives a 10% white-label discount on the bill** — netted at source, not paid out as commission. Throttle invoices the partner at 90% of list price for white-label-mode subscriptions.
 - The client may not have visibility into the bill (this is a partner choice).
+
+> **Legal status:** Whether this is a "discount" (treated as net revenue) or a "commission" (gross revenue minus a 1099 expense) for accounting and tax purposes is **pending legal review**. The economics match either way; the line items on financial statements and 1099 forms differ. Path A specifics may evolve once Throttle integration ships and finance/legal sign off. Implementations should treat the discount-at-source mechanism as the default direction but expect refinement.
 
 #### Path B: Promote client to owner
 
@@ -633,11 +686,28 @@ If a partner refuses to promote a client who wants ownership, the client has an 
 
 This is intentionally a **manual support process** rather than self-service: the human review prevents abuse in either direction (clients claiming ownership of accounts where the partner is genuinely paying, or partners holding accounts hostage).
 
-### Race-to-create
+### Race-to-create (and the prospect-side guards that come with it)
 
-Multiple partners can create trials for the same prospect email — each gets their own `Referral` row in `pending` status. Whichever partner converts the prospect to paid wins the credit. If both somehow convert (unlikely edge case where a prospect actively tries both partners), both get credit; the work was done in both cases.
+The partner side is intentional: multiple partners can create trials for the same prospect email — each gets their own `Referral` row in `pending` status. Whichever partner converts the prospect to paid wins the credit. If both somehow convert (unlikely edge case), both get credit; the work was done in both cases. A cooldown would constrain partners' selling processes for marginal benefit.
 
-This is intentional: a cooldown would constrain partners' selling processes for marginal benefit. The "action is proof" + "convert to paid" combination is self-balancing.
+But the **prospect side** needs guards or it becomes: invitation spam, abandoned orgs littering the DB, and an email-list-poisoning vector if a malicious "partner" creates trials for thousands of unwitting prospects. The standard requires:
+
+1. **Per-partner rate limit on trial creation** — `10 / hour` per partner-org by default (per §22). Higher tiers configurable. Prevents bulk creation against scraped email lists.
+
+2. **Pending-trial check on creation.** When partner B tries to create a trial for `prospect@example.com` and partner A already has a `pending` Referral for that email (across any org A created), the API responds:
+   ```
+   409 Conflict
+   { "error": "pending_trial_exists",
+     "existingReferralId": "ref_...",
+     "existingPartnerOrgName": "Acme Consulting" }
+   ```
+   Partner B is told another partner is already engaged with this prospect — they can coordinate or wait. Hard reject is not what we want (could block legitimate cases where two partners are working with the same prospect by mutual agreement); soft warning + override flag (`force: true` body param) is the standard.
+
+3. **Prospect-side notification** — when a second partner force-creates despite the warning, the prospect receives ONE consolidated email summarizing both invitations: "Two partners are inviting you — pick one." Not two separate "you've been invited to Acme" emails to the same address. This is implementation work in the partner trial creation flow + Resend template.
+
+4. **Abandoned-org cleanup.** If an invited user never signs in after 14 days, the partner-trial org auto-deletes. Releases the email for re-invitation, removes orphaned data. Cron sweeps for `Organization.createdAt > 14 days ago AND only one User row (the partner) AND no client login`.
+
+These three guards together (rate limit + conflict warning + auto-cleanup) make race-to-create safe without removing the partner-side flexibility.
 
 ### Partner Dashboard
 
@@ -657,9 +727,11 @@ This is intentional: a cooldown would constrain partners' selling processes for 
 
 ### Reward tier and commission timing
 
-- **10% recurring commission, no cap** for both `affiliate` and `direct` referrals.
+- **10% recurring commission, no cap, no time limit** for both `affiliate` and `direct` referrals.
 - Commissions for billing events in month N are paid in month N+1. Example: a client pays their April invoice on April 15. The partner's $X commission accrues to the May commission statement, paid early May.
 - This gives clean monthly reconciliation, time for refunds/chargebacks to settle, and predictable payout timing.
+
+> **On the absence of a cap or sunset:** This is a deliberate choice. A 24/36-month cap would lower lifetime commission cost but adds complexity (cap tracking, sunset notifications, partner disputes near expiry) and weakens the partner's long-term commitment to the client relationship. We accept that a partner who originated a client 5 years ago still earns 10% on that client's bill — this aligns the partner's incentive with the client's long-term success. If commission economics ever genuinely strain margins, the lever to pull is the percentage (10% → 8%) for *new* partnerships, not capping existing ones (which would be a trust-eroding change).
 
 ### API surface (planned)
 
@@ -730,7 +802,9 @@ The `function@` prefix indicates email type (`orders`, `support`, `noreply`, `no
 
 ### Templates: react-email, not inline HTML
 
-**All transactional emails use [`react-email`](https://react.email).** Templates are JSX components in `src/emails/` (or equivalent), version-controlled, compiled to HTML at build time. This gives apps:
+**All transactional emails use [`react-email`](https://react.email).** Templates are JSX components in `src/emails/` per-app, version-controlled, compiled to HTML at build time. Templates **compose shared components** from `@epic/email-templates` (header, footer, button, signature, layout primitives) — those guarantee visual consistency across apps without locking apps into identical templates. App-specific content (subject lines, body copy, variable substitution) stays in the app's `src/emails/` directory.
+
+This gives apps:
 
 - Syntax highlighting and type checking
 - Component reuse (header, footer, button)
@@ -1020,7 +1094,14 @@ X-Epic-Timestamp: <unix_seconds>
 
 **Signature:** `HMAC-SHA256(secret, "{timestamp}.{body}")`. Customers verify within a 5-minute window to prevent replay.
 
-**Payload size cap: 1 MB.** Larger events are truncated with a flag indicating truncation; customers can fetch the full resource via API.
+**Payload size cap: 1 MB.** Larger events are truncated; customers can fetch the full resource via API. Truncation is signaled in the **header** (not the body) so customers can branch before parsing JSON:
+
+```
+X-Epic-Truncated: true
+X-Epic-Resource-Url: https://api.<app>/api/v1/<resource>/<id>
+```
+
+The header is the canonical signal. The body remains valid JSON of the truncated event; downstream parsers don't need to handle a non-standard payload shape.
 
 **Request timeout: 10 seconds.** Non-2xx response = failure.
 
@@ -1201,6 +1282,8 @@ A separate log for **security-sensitive events**, distinct from the business act
 - Security audit logs typically have longer retention (7+ years for SOC 2 / regulatory requirements)
 - Different access controls — audit log is read-restricted to OWNER + ADMIN with `audit.read`
 
+**Routing rule:** an event goes to **either** ActivityLog (§14) **or** AuditLog (§14.5), not both. The baseline events listed below (`auth.login`, `user.role_changed`, `apikey.created`, etc.) write only to AuditLog. Business events (`product.created`, `order.shipped`) write only to ActivityLog. If a category genuinely needs to surface in both UIs, the recommendation is to query both at read time, not double-write.
+
 ### Schema
 
 ```prisma
@@ -1251,6 +1334,8 @@ Each app evaluates additional security events relevant to its domain. Examples:
 ### Retention
 
 **7 years.** Audit log retention is a compliance requirement (SOC 2, GDPR, regional data laws). Cold-storage past 1 year is acceptable.
+
+> **Legal note on tombstoned userIds in audit retention:** After a user invokes right-to-deletion (§15.2), `AuditLog.userId` rows referencing that user are preserved — the user row is tombstoned (PII nulled) but `User.id` survives so audit trails keep referring to "user `abc-123` did X." This is **pseudonymous data** under GDPR — defensible under the "compliance with legal obligations" and "legitimate interests" lawful bases (Art. 6.1.c / 6.1.f) for security-records retention. **Region-specific deletion requests may demand stricter handling** (full anonymization, or a maximum retention shorter than 7 years for non-financial events). Apps with EU/UK/CA customers should run this past legal before relying on the 7-year default. Document the basis in the app's compliance runbook.
 
 ### UI surfaces
 
@@ -1557,6 +1642,30 @@ Apps using a cron library (node-cron, BullMQ, etc.) follow this pattern:
 - Failures captured as exceptions; recovered failures logged at `warn`
 - Standard timezone handling: jobs default to UTC unless explicitly overridden
 
+**Concurrency / re-entrancy: every job must be safe to run twice simultaneously.** Two common ways the same job fires twice:
+- A deploy fires the same scheduled job during cutover (old + new instance both run).
+- Two API replicas both have the cron registered.
+
+Standard mitigation — every cron handler acquires a single-instance lock before mutating data:
+
+```ts
+// Postgres advisory lock approach (no extra infra):
+const lockKey = hashStringToInt(jobName);   // stable hash
+await prisma.$executeRaw`SELECT pg_try_advisory_lock(${lockKey})`;
+const got = (result[0] as any).pg_try_advisory_lock;
+if (!got) {
+  logger.info(`[cron:${jobName}] another instance holds the lock; skipping`);
+  return;
+}
+try { await handler(); } finally {
+  await prisma.$executeRaw`SELECT pg_advisory_unlock(${lockKey})`;
+}
+```
+
+Or Redis `SETNX` with a TTL longer than the job's expected runtime. Either works — pick the one that fits the app's existing infra.
+
+**Idempotency on top of locking:** even with a lock, every handler should be safe against partial failures. Mutation patterns: upsert instead of insert when possible; mark rows as "processed" with a timestamp so re-runs skip them; transaction-wrap multi-step writes.
+
 Standard scheduled jobs every app may need:
 
 - Trial expiry sweep (when Throttle ships)
@@ -1584,7 +1693,7 @@ Standardized on **Prisma migrations** across the portfolio:
 
 ### API versioning
 
-- Standardized on URL prefix: `/api/v1/`
+- Standardized on URL prefix: `/api/v1/`. **All endpoint paths shown elsewhere in this doc** (`/affiliates/me/code`, `/users/invite`, `/orgs/me`, etc.) are implicitly under this prefix — the prefix is omitted in examples for readability.
 - Breaking changes go to `/api/v2/`
 - Version sunset announced via headers (`Sunset:`, `Deprecation:`) at least 6 months before removal
 
@@ -1696,7 +1805,7 @@ Every marketing site must:
 4. **Have a "Sign Up Free" or "Get Started" CTA** that points at `app.<domain>/signup` directly (not `/login`).
 5. **`/partners` landing page** 🧭 — explains the partner program.
 6. **`/partners/apply` form** 🧭 — submits to API.
-7. **Cookie consent banner** — no analytics cookies set without explicit consent. The affiliate cookie is functional and can argue exemption, but document the stance.
+7. **Cookie consent banner** — no analytics cookies set without explicit consent. The affiliate cookie is *intended* to fall under the "strictly necessary / functional" exemption, but **EU regulators have been narrowing this exemption** for marketing-purpose cookies. Status: **pending legal sign-off**. Until that lands, apps targeting EU traffic should treat the affiliate cookie as consent-required and surface it in the consent banner alongside analytics. Document the stance per app.
 
 Reference: `astro-foundryims/src/layouts/Layout.astro`. Cookie capture and link rewriting:
 
@@ -1827,11 +1936,11 @@ When bootstrapping the next app, replicate in this order:
 
 9. **One-time secrets, hashed at rest.** API keys, webhook secrets, deletion confirm tokens are shown to the user once, hashed in the DB. Never recoverable.
 
-10. **Permissions are checked on every request.** Sessions don't cache role data beyond a short documented TTL. A demotion takes effect immediately, not at token expiry.
+10. **Permissions are checked on every request.** Sessions don't cache role data beyond a short documented TTL (5–30 seconds default per §16). A demotion takes effect within seconds, not at session/token expiry.
 
 11. **Privacy and deletion are first-class.** Right-to-deletion is built in, not bolted on. PII is in nullable fields only. Activity logs reference user IDs, not emails. Audit logs use HMAC for any necessary email hashes. Backups have documented 30-day retention with deletion-rerun-on-restore.
 
-12. **Defense in depth on tenancy.** Every query filters by orgId. Every API request is scoped to the caller's active org. CI lint flags unscoped database queries. Postgres RLS as a future hardening layer.
+12. **Defense in depth on tenancy.** Every query filters by `orgId`. Every API request is scoped to the caller's active org. **PR review checklist** treats unscoped `find*`/`update*`/`delete*` on org-owned tables as a bug. (`@epic/prisma-tenancy-lint` — a CI rule that flags unscoped queries automatically — is a 🧭 future tool, not yet built. Until it ships, manual review is the enforcement mechanism.) Postgres RLS as a future hardening layer.
 
 13. **PII boundaries are explicit.** No PII in Sentry tags, URL paths, log lines, or aggregate analytics. PII lives in `User`, `Organization`, and explicit snapshot fields only.
 
@@ -1876,9 +1985,41 @@ This is a deliberate operational stance: **rate-limit transparently, not silentl
 
 ## 23. Billing & Throttle Integration ⏸️ (stub)
 
-Epic apps use **Throttle** for payments and billing. Standardized integration patterns will be documented in a separate billing standardization doc.
+> **Status as of v3.2:** Throttle is Epic's intended billing platform — **not yet built or live**. Phase: **design**. ETA: **TBD, gated on its own design doc**. Until §23 is upgraded out of stub status, **do not depend on Throttle for any blocking design decision in any app**. Sections marked ⏸️ in §2 are blocked on this doc landing.
 
-This v3 doc reserves integration points for:
+### What Throttle is (and isn't)
+
+Throttle will be Epic's billing platform — a Stripe-style layer that issues invoices, processes subscriptions, and emits billing events. **It is not a system of record for users or organizations** — Clerk is, and stays so. Throttle's customer records are a downstream subscription view of the same orgs that already exist in Clerk + the local DB.
+
+### Customer-to-org mapping (canonical)
+
+To avoid the three-source-of-truth problem (Clerk users, Throttle customers, local DB), the mapping is locked in upfront:
+
+- **One Throttle customer per Clerk Organization.** The local `Organization` row carries a `throttleCustomerId String? @unique` field reserving the link.
+- **Throttle has no concept of users.** Subscription state belongs to the org. Individual users don't have separate billing profiles. (If multi-user billing visibility is needed, that's a Throttle Dashboard role concern, not a Clerk-level identity concern.)
+- **Direction of trust:** the local DB is canonical for org existence; Throttle is canonical for subscription state. When an org is created, we provision a Throttle customer in the same transaction. When an org is closed, we cancel the Throttle customer.
+- **No customer record exists for users who aren't in any org.** Rules out a "personal billing profile separate from work account" model. Aligns with B2B SaaS norms.
+
+This locks in **two** sources of truth (Clerk identity + Throttle billing) instead of three, with one-way provisioning from Org → Throttle.
+
+### Reserved schema
+
+Add to `Organization` ahead of Throttle integration so activation is a code change, not a migration:
+
+```prisma
+model Organization {
+  // ... existing fields
+  throttleCustomerId  String?  @unique  // populated when Throttle integration ships
+}
+
+model BillingEvent {
+  // see §17.5 Throttle webhook stub — already reserved
+}
+```
+
+### Reserved integration points
+
+This doc reserves integration points for:
 
 - Trial creation, expiration, and reminder emails (§8)
 - Trial-to-paid conversion detection and `Referral.convertedAt` updates (§7, §8)
@@ -1888,11 +2029,20 @@ This v3 doc reserves integration points for:
 - Dunning and payment failure handling (§11 — `billing.payment_failed` is transactional notification class)
 - Per-API-key request budget tier definitions (§22)
 
-**Sections currently blocked on the billing doc:**
+### Webhook flow (architectural decision)
+
+When Throttle ships, billing events flow as: **Throttle → app's `/webhooks/throttle` handler → app emits its own standardized event to customer-defined webhooks per §12.**
+
+The app re-emits because:
+- Customers integrate with the app's domain events (e.g., `subscription.changed` with the org's data shape), not Throttle's internal event vocabulary.
+- The app can enrich (org context, plan tier names) and filter (only events the customer's webhook subscribed to).
+- Throttle credentials never reach customer endpoints.
+
+### Sections currently blocked on the billing doc
 
 - §7 Partner Program — commission calculation and payout flows
 - §8 Trials — conversion detection and expiration enforcement
 - §11 Notifications — `billing.payment_failed` semantics
 - §22 Rate Limiting — per-tier API key budgets
 
-Until the billing doc lands, these features remain ⏸️ blocked. Schema reserves the relevant fields so activation is a code change, not a migration.
+Until §23 is upgraded out of stub status, these features remain ⏸️ blocked. Schema reserves the relevant fields so activation is a code change, not a migration.
