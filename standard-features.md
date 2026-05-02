@@ -1,4 +1,4 @@
-# Epic Design Labs — Standard Features (v3.2)
+# Epic Design Labs — Standard Features (v3.3)
 
 **Canonical reference** for the foundational features every Epic Design Labs app should have. New apps adopt this whole stack so users get a consistent experience — same login, same org model, same affiliate program, same support widget — across the whole portfolio.
 
@@ -21,6 +21,47 @@
 - 📋 **Proposed** — New in v3; not yet implemented anywhere
 
 **Reference implementation:** Foundry IMS (api: `Epic-Design-Labs/app-foundry-ims-api`, admin: `app-foundry-ims-admin`, marketing: `astro-foundryims`). Foundry is the most current implementation; if you find a better pattern, propose a standard update rather than diverging silently.
+
+### Changes in v3.3
+
+Incorporates Evident team's review of v3.2. Five blockers fixed (real internal inconsistencies any implementer would trip over), eight policy-resolution items closed, plus polish.
+
+**Blockers fixed:**
+
+- **§6 self-referral check** — was checking only the referrer's own email; with per-org codes that's incoherent (any teammate signing up with a different email would have passed). Now blocks if the new signup's email matches **any active member** of the referrer's org.
+- **§3.8 Clerk webhooks** — entirely new section. Standardizes consumption of `user.deleted`, `organization.deleted`, `user.updated`, `session.created`, `organizationMembership.created/.deleted`. Signature verification via svix + `CLERK_WEBHOOK_SECRET`.
+- **§15.2 deletion ordering** — explicit Clerk-delete-first → tombstone-second order, with retry/dead-letter on Clerk failure to avoid the half-deleted-then-un-tombstoned race.
+- **§6 Referral FK asymmetry** — `referrerOrg` now `SetNull` (preserves history when referrer org closes), `referredOrg` stays `Cascade`. Closing the referrer org doesn't delete the row, just orphans it.
+- **§11 whole-org notification semantics** — new `audience` field (`user | owners | admins | all_members`) with per-category default audience table. `userId: null + audience: 'admins'` means "fan out to all org admins."
+
+**Policy items resolved:**
+
+- **§3.4 `User.affiliateCode` long-term** — column dropped via follow-up migration after Foundry per-org cutover; new apps don't add it. Added to §2 audit checklist.
+- **§4 `affiliate.manage` permission** — replaces the ad-hoc `affiliate.read + org.manage` combination from v3.2 for code regeneration.
+- **§3.6 push to Clerk on login** — opportunistic write of `role` + `accountType` to Clerk metadata on every authenticated request when local DB doesn't match. Keeps client-side `useUser().publicMetadata` fresh after signups and recent role changes.
+- **§14.5 + §14 partner-seat actor** — new `partnerSeatId` field on AuditLog and ActivityLog; actor resolution is `userId` OR `partnerSeatId`. Added `partner.payout_email_changed` to baseline audit events.
+- **§12 receiver idempotency** — explicit customer-facing guidance: dedupe by `X-Epic-Delivery-Id`, at-least-once delivery, exactly-once is the customer's responsibility.
+- **§17.5 health check criticality** — only `database` is critical (drives 503 + LB rotation); other sub-checks (Clerk, Resend, Dispatch) are informational. Prevents minor third-party hiccups from cascading into total outage.
+- **§18.7 cookie consent** — picked a stance: standard library `@epic/cookie-consent`, affiliate cookie categorized as functional (Recital 30), fall back to "marketing" categorization if legal hasn't cleared the functional designation.
+- **§21.12 lint tool name** — `@epic/eslint-plugin-tenancy` (TypeScript AST + Prisma schema introspection). Still 🧭 not built; manual review until then.
+
+**New §17.6 sections:**
+
+- Standard env var name table (prevents future divergence).
+- Secret rotation policy (per-secret cadence; compromise-driven always wins).
+- Uptime monitoring stance (`Better Uptime` default, alert thresholds).
+- Email warmup window (2-week ramp before steady-state volume).
+- Testing standards (auth + core domain integration tests required; no global Clerk mocking).
+- Shared library packaging (`Epic-Design-Labs/shared-libraries` monorepo published to GitHub Packages).
+- API versioning scope (customer-facing API gets `/v1/`; admin BFF routes are unversioned).
+- Mobile / PWA explicitly out of scope.
+
+**Tiny:**
+
+- §14 `source` standardized as a closed value list (not free-text).
+- §17.5 cron list adds stale-notification cleanup + abandoned-partner-trial-org cleanup.
+- §22 free-tier API budget default (10k req/hr per key) for apps without billing.
+- §2 schema audit deliverable specified (named diff document, ratified before v3.3 audit phase).
 
 ### Changes in v3.2
 
@@ -148,7 +189,8 @@ The exceptions are **shared libraries** (e.g., `@epic/disposable-emails`, `@epic
 - [ ] Set up 7-year audit-log cold-storage infrastructure per §14.5
 - [ ] Convert Stackbe → fully-on-Clerk for any features still routing through Stackbe (feature requests was the last remaining one as of v3.1)
 - [ ] PR-review enforcement of tenancy-scoped queries until `@epic/prisma-tenancy-lint` ships per §21.12
-- [ ] Full schema audit before v3 ratification
+- [ ] **Schema audit deliverable:** produce a diff document comparing Foundry's `prisma/schema.prisma` against the v3.3 baseline schemas in §3.4 (Org/User), §6 (Referral with `referrerOrgId` SetNull + `sharedByUserId`), §7 (PartnerSeat / PartnerSeatAssignment), §11 (Notification with `audience` + `deliveryClass`, NotificationPreference per-method), §12 (Webhook + WebhookDelivery with secret rotation fields), §13 (ApiKey with `expiresAt` + `scopes`), §14 (ActivityLog with `partnerSeatId` + standard `source` values), §14.5 (AuditLog with `partnerSeatId`), §15.2 (DataDeletionRequest, DataDeletionAudit). One doc, one PR, ratified before v3.3 enters audit phase
+- [ ] Drop `User.affiliateCode` column once per-org migration completes (separate migration after the data move)
 
 ---
 
@@ -210,7 +252,7 @@ model User {
   clerkUserId    String?                                 // NOT @unique — see note below
   email          String?                                 // nullable for tombstones (§15)
   name           String?                                 // nullable for tombstones
-  affiliateCode  String?   @unique                       // legacy — orgs are now the affiliate unit; field reserved for migration
+  // affiliateCode — REMOVED in v3.3. Orgs are the affiliate unit (see §6). Foundry-only legacy column to be dropped once migration completes; new apps don't add it.
   accountType    String    @default("client")            // "client" | "partner" — see §7
   role           UserRole  @default(MEMBER)
   lastLoginAt    DateTime?
@@ -242,7 +284,7 @@ enum UserRole {
   - **Cross-org operations** (GDPR sweep, "log this user out everywhere", "list this person's memberships") use `findMany({ where: { clerkUserId } })` and iterate.
   - **Lint principle (per §21.12):** any `find*` on `User` that doesn't include `orgId` in the where-clause is treated as a tenancy bug unless explicitly annotated as a cross-org operation.
 - `User.email`, `User.name`, `User.clerkUserId` are **nullable** to support GDPR tombstoning (§15). PII is nulled on deletion; the row itself survives so foreign keys keep working. **Migration note:** apps that started with `email String` (required) — including Foundry — need an audited `ALTER TABLE` to make these columns nullable. The `@@unique([orgId, email])` constraint continues to work; Postgres allows multiple NULLs in unique constraints by default.
-- The shift from per-user to per-org affiliate codes is locked in for v3. The `User.affiliateCode` field is reserved for migration only.
+- The shift from per-user to per-org affiliate codes is locked in for v3. The `User.affiliateCode` field is reserved for migration only — present in the schema only so apps mid-migration can read old values during cutover. **After Foundry's per-user → per-org affiliate migration completes, the `User.affiliateCode` column gets dropped via a follow-up migration** (added to the §2 audit checklist as a separate item from the migration itself, so it doesn't get forgotten). New apps that bootstrap from this standard skip this column entirely — `affiliateCode` lives on `Organization`, never on `User`.
 
 ### 3.5 ClerkGuard + permission re-validation
 
@@ -265,6 +307,8 @@ Some fields exist in both Clerk and the local DB (`accountType`, `role`, org mem
 
 **Sync direction is one-way and write-on-change.** When local `role` or `accountType` changes (admin promotes a user, partner application is approved), we write the new value to Clerk metadata in the same transaction. We do **not** poll or sync from Clerk back to local. Treat Clerk metadata as **eventually consistent / advisory** — the frontend may read it for UI hints (`useUser().publicMetadata`), but the API always re-validates against the local DB. Direct edits to Clerk metadata via the dashboard during incidents will get overwritten on the next local update for that user.
 
+**Plus: push on login.** On every successful authenticated request that hits `ClerkGuard`, after the local DB lookup, opportunistically write the current `role` + `accountType` to Clerk metadata if they don't match. This keeps client-side `useUser().publicMetadata` reads accurate. Without it, a fresh signup or a recently-promoted user would have stale Clerk metadata on the client until the next local-DB-triggered write — and the client SDK would render UI off the wrong values. The write is fire-and-forget (no blocking), and only fires on mismatch (no extra write traffic in the steady state).
+
 If a divergence is detected during permission re-validation, log to Sentry at `warn` and reconcile by reading the local DB and writing to Clerk.
 
 ### 3.7 Org switcher (header dropdown)
@@ -282,7 +326,36 @@ Behavior contract:
 
 The `X-Clerk-Org-Id` header pattern requires every manual `fetch()` site to use a shared `buildAuthHeaders()` helper instead of constructing headers inline. See `app-foundry-ims-admin/src/lib/api/core.ts`.
 
-### 3.8 Org lifecycle endpoints
+### 3.8 Clerk webhook handling
+
+Apps consume **Clerk webhooks** to keep local state aligned when Clerk-side changes happen (admin deletes a user from the dashboard, a user updates their email, etc.). Without this, local DB drifts from Clerk and bugs surface as "ghost users" or "stale email."
+
+**Required env var:** `CLERK_WEBHOOK_SECRET` (Clerk-issued, per-app, per-environment).
+
+**Signature verification:** every Clerk webhook is signed via [svix](https://docs.svix.com/receiving/verifying-payloads/how). Use the `svix` npm package to verify before processing — never trust the body without verification.
+
+```ts
+import { Webhook } from 'svix';
+
+const wh = new Webhook(process.env.CLERK_WEBHOOK_SECRET!);
+const evt = wh.verify(rawBody, headers) as ClerkWebhookEvent;  // throws on invalid signature
+```
+
+**Required event handlers** every app implements:
+
+| Event | What to do |
+|---|---|
+| `user.deleted` | Tombstone the local `User` row(s) for this `clerkUserId` so they can't be recreated on next login attempt. Tombstone in the §15.2 sense — null PII, set `deletedAt`, keep the row for FK integrity. |
+| `organization.deleted` | Cascade-close the local `Organization` row matching `clerkOrgId`. Same flow as `DELETE /orgs/me`. |
+| `user.updated` | Propagate email/name changes to local `User` rows (across all orgs the user belongs to). Critical when the user changes their email in their account-tab UI. |
+| `session.created` | Drives the `auth.new_device_login` audit event (§14.5) when the IP / user-agent doesn't match the user's recent sessions. |
+| `organizationMembership.created` / `.deleted` | Sync local `User` rows with Clerk org membership (lazy-create on `created`, tombstone or remove on `deleted`). Defends against memberships changed via Clerk dashboard. |
+
+**Endpoint pattern:** `POST /webhooks/clerk` (per-app, public — secured by signature verification, not auth). Handler must be idempotent — Clerk retries on non-2xx, and webhook at-least-once delivery means a user might see the same `user.deleted` event twice.
+
+**Failure handling:** if the webhook can't process (database down, Clerk API rate limit during cleanup), return 5xx so Clerk retries. Log to Sentry at `error`.
+
+### 3.9 Org lifecycle endpoints
 
 | Action | Endpoint | Who | Notes |
 |---|---|---|---|
@@ -328,6 +401,7 @@ Role lives on `User.role`. Clerk's own `org:admin` / `org:member` is mapped 1:1 
 | `support.read` | View support tickets |
 | `support.write` | Create/comment on support tickets |
 | `affiliate.read` | View own org's affiliate code, stats, and commissions |
+| `affiliate.manage` | Regenerate the org's affiliate code |
 | `apikeys.manage` | Create/revoke API keys |
 | `activity.read` | View activity log |
 | `audit.read` | View security audit log |
@@ -337,8 +411,8 @@ Role lives on `User.role`. Clerk's own `org:admin` / `org:member` is mapped 1:1 
 
 Default role-to-permission mapping (apps may extend, must not contract):
 
-- **OWNER** — all permissions including `org.close`
-- **ADMIN** — all except `org.close`
+- **OWNER** — all permissions including `org.close` and `affiliate.manage`
+- **ADMIN** — all except `org.close` (includes `affiliate.manage`)
 - **MEMBER** — `settings.read`, `support.read`, `support.write`, `affiliate.read`, `activity.read`, `notifications.manage`
 - **VIEWER** — `settings.read`, `support.read`, `affiliate.read`, `activity.read`, `notifications.manage`
 
@@ -424,16 +498,16 @@ These rules apply to every app:
 
 2. **Last-touch attribution wins.** If a prospect clicks two different affiliate links in the 30-day cookie window, the most recent code overwrites the earlier one. This is a deliberate trade-off: simpler than first-touch, aligned with industry standard, but unfair to top-of-funnel educators who may lose credit to bottom-of-funnel coupon sites. Pricing the affiliate tier at 10% with no cap is intended to keep both kinds of partners engaged.
 
-3. **Self-referral is rejected** by email match against the *referrer's own email*. If the signing-up user's email matches the referrer's, attribution is blocked. (Earlier drafts said "any user in the referrer's org" — this was too broad and would block legitimate co-worker referrals.) Returns `{ attributed: false, reason: "self_referral" }`.
+3. **Self-referral is rejected by membership match against the referrer's org.** If the signing-up user's email matches **any active member** of the referrer's org, attribution is blocked. With per-org codes (see rule 1), the entire org shares the link — so a teammate signing up via their own org's link IS the org self-referring. Returns `{ attributed: false, reason: "self_referral" }`. (Earlier drafts checked only the referrer's own email — that was incoherent with the per-org primitive; a teammate signup with a different email would have passed and the org would have credited itself.)
 
-4. **Code regeneration: snapshots are immutable.** A user with `affiliate.read` + `org.manage` can regenerate their org's `affiliateCode`. Existing `Referral` rows keep the old code (we snapshot `affiliateCode` on the Referral). The old code stops working for *new* attributions.
+4. **Code regeneration: snapshots are immutable.** A user with `affiliate.manage` can regenerate their org's `affiliateCode`. Existing `Referral` rows keep the old code (we snapshot `affiliateCode` on the Referral). The old code stops working for *new* attributions.
 
 ### Schema
 
 ```prisma
 model Referral {
   id              String    @id @default(uuid())
-  referrerOrgId   String                              // local Organization id (NOT Clerk id)
+  referrerOrgId   String?                             // nullable — set NULL when referrer org closes (preserves referral history for the referred org)
   referredOrgId   String    @unique                   // local Org id; one credit per signup
   referralType    String    @default("affiliate")     // "affiliate" | "direct"
   affiliateCode   String                              // snapshot at attribution time
@@ -445,15 +519,20 @@ model Referral {
   createdAt       DateTime  @default(now())
   convertedAt     DateTime?
 
-  referrerOrg     Organization @relation("ReferrerOrg", fields: [referrerOrgId], references: [id], onDelete: Cascade)
-  referredOrg     Organization @relation("ReferredOrg", fields: [referredOrgId], references: [id], onDelete: Cascade)
+  referrerOrg     Organization? @relation("ReferrerOrg", fields: [referrerOrgId], references: [id], onDelete: SetNull)
+  referredOrg     Organization  @relation("ReferredOrg", fields: [referredOrgId], references: [id], onDelete: Cascade)
 
   @@index([referrerOrgId])
   @@index([affiliateCode])
 }
 ```
 
-`referrerOrg` cascade-deletes when the referrer org closes — see trade-offs table above.
+**Asymmetric FK behavior is intentional:**
+
+- **`referrerOrg` uses `onDelete: SetNull`** — when a referrer org closes, the row survives with `referrerOrgId: null`. Preserves the referred org's history (we still know it was originally an affiliate signup) and keeps commission accounting trails intact for any commissions that already accrued. The status is set to `expired` by the close handler so no new commissions accrue. The `affiliateCode` snapshot field still tells you who originated the relationship even though the org is gone.
+- **`referredOrg` uses `onDelete: Cascade`** — when the referred org closes, delete the Referral row. The org is gone; there's nothing left to track and no future events to attribute.
+
+The §3.9 close-org dialog still surfaces the open-commission warning ("You have $X in open referral commissions; closing forfeits future payouts on N referred orgs") — that's a UX nicety, not a database constraint. The schema permits the close; the dialog informs the user before they confirm.
 
 **Schema fix from v2:** `Referral.referrerOrgId` is a local `Organization.id`, not a Clerk ID. (v2 had `referrerUserId` referencing a Clerk user ID, which is unstable across instance recreation and breaks GDPR deletion.)
 
@@ -945,7 +1024,8 @@ Users mix and match per category. Example: "Email me for new tickets, but only s
 model Notification {
   id              String   @id @default(uuid())
   orgId           String
-  userId          String?  // null = whole-org notification
+  userId          String?  // null = whole-org fanout, see audience rules below
+  audience        String   @default("user")  // "user" | "owners" | "admins" | "all_members"
   category        String   // e.g. "support.ticket_replied", "affiliate.signup"
   deliveryClass   String   @default("user_pref")  // "user_pref" | "transactional"
   title           String
@@ -976,6 +1056,37 @@ model NotificationPreference {
 - Org closure warnings
 
 **`deliveryClass: "user_pref"`** (default) respects the user's `NotificationPreference` settings.
+
+### Audience resolution
+
+`userId: null` means the notification fans out to multiple recipients. The `audience` field controls who:
+
+| Audience value | Recipients |
+|---|---|
+| `user` (default; requires non-null `userId`) | Just the named user |
+| `owners` | All `OWNER` users in the org |
+| `admins` | All `OWNER` + `ADMIN` users in the org |
+| `all_members` | Everyone in the org |
+
+**Per-category target convention** — every standard category maps to a default audience; apps may override on a per-event basis if needed:
+
+| Category | Default audience |
+|---|---|
+| `org.member_invited` | `admins` |
+| `org.member_joined` | `admins` |
+| `org.member_removed` | `owners` (security-sensitive) |
+| `org.role_changed` | `user` (the person whose role changed) + `owners` |
+| `support.ticket_replied` | `user` (the user who filed the ticket) |
+| `affiliate.signup` | `all_members` (all org members can see) |
+| `partner.client_created` | `admins` of the partner org |
+| `partner.commission_earned` | `admins` of the partner org |
+| `auth.login_new_device` | `user` |
+| `auth.password_changed` | `user` |
+| `apikey.created` | `owners` (security-sensitive) |
+| `billing.payment_failed` | `owners` (transactional, can't be opted out) |
+| `privacy.deletion_confirmed` | `user` |
+
+When `audience` ≠ `user`, the sender writes one `Notification` row per intended recipient (so the bell badge is per-user, mark-read is per-user, etc.). The `audience` field is preserved on the row for analytics/audit but the fanout happens at create time, not at read time.
 
 ### Standard notification categories
 
@@ -1135,9 +1246,15 @@ Standardized across apps:
 5. On failure: increment attempt, schedule next retry, increment `failureCount`
 6. Cron sweeps for `pending` deliveries past `nextAttemptAt`
 
-### Ordering guarantee
+### Ordering guarantee + receiver idempotency
 
-**Webhook ordering is best-effort.** Retries with exponential backoff mean events can arrive out of order. **Treat the resource's own state as authoritative** — webhooks are notifications, not source of truth. Document this clearly to customers.
+**Webhook ordering is best-effort.** Retries with exponential backoff mean events can arrive out of order. **Treat the resource's own state as authoritative** — webhooks are notifications, not source of truth.
+
+**At-least-once delivery, not exactly-once.** Customers MUST dedupe by `X-Epic-Delivery-Id` to handle retries safely. The customer-facing developer docs include this guidance verbatim:
+
+> Receivers should dedupe by `X-Epic-Delivery-Id` to handle retries safely. We guarantee at-least-once delivery; treating each delivery as idempotent on your side is your responsibility.
+
+Document this clearly in every customer-facing webhook integration page.
 
 ### API surface
 
@@ -1223,22 +1340,36 @@ Per-org change history for **business events**, queryable by entity. (Security e
 
 ```prisma
 model ActivityLog {
-  id          String   @id @default(uuid())
-  orgId       String
-  entityType  String
-  entityId    String
-  action      String
-  summary     String
-  source      String   // "manual" | "webhook" | "import" | "cron" | "partner_seat" | ...
-  sourceId    String?
-  metadata    Json?
-  createdBy   String?  // local User.id (NOT email — see §15)
-  createdAt   DateTime @default(now())
+  id            String   @id @default(uuid())
+  orgId         String
+  entityType    String
+  entityId      String
+  action        String
+  summary       String
+  source        String   // see standard values below
+  sourceId      String?
+  metadata      Json?
+  createdBy     String?  // local User.id (NOT email — see §15) — null when partnerSeatId is set
+  partnerSeatId String?  // set when actor is a partner acting via a partner seat (§7); see §14.5
+  createdAt     DateTime @default(now())
 
   @@index([orgId, entityType, entityId])
   @@index([orgId, createdAt])
+  @@index([partnerSeatId, createdAt])
 }
 ```
+
+**Standard `source` values** (apps may extend; document any additions in app-level changelog):
+
+- `manual` — user-driven action via the admin UI
+- `api` — action via API key
+- `webhook` — inbound webhook from an external service (BC, ShipStation, Throttle, etc.)
+- `import` — CSV/sheet import job
+- `cron` — scheduled job
+- `partner_seat` — action originated from a `PartnerSeat` actor (paired with non-null `partnerSeatId`)
+- `migration` — data migration / bulk fix script
+
+Treat `source` as a closed enum for queryability; if an app needs a new source, add it to the standard list, not as a one-off string.
 
 > **Migration note:** Foundry currently stores `createdBy` as email. Migration required to backfill from email → User.id, with edge cases for emails of users who've left the org.
 
@@ -1288,21 +1419,25 @@ A separate log for **security-sensitive events**, distinct from the business act
 
 ```prisma
 model AuditLog {
-  id          String   @id @default(uuid())
-  orgId       String
-  userId      String?  // local User.id — actor of the action
-  action      String   // see baseline list below
-  resource    String?  // affected entity (e.g., "user:abc-123", "apikey:xyz")
-  ipAddress   String?
-  userAgent   String?
-  metadata    Json?
-  createdAt   DateTime @default(now())
+  id            String   @id @default(uuid())
+  orgId         String
+  userId        String?  // local User.id — actor of the action (null when acting via partnerSeatId)
+  partnerSeatId String?  // set when the actor is a partner acting via a partner seat (§7)
+  action        String   // see baseline list below
+  resource      String?  // affected entity (e.g., "user:abc-123", "apikey:xyz")
+  ipAddress     String?
+  userAgent     String?
+  metadata      Json?
+  createdAt     DateTime @default(now())
 
   @@index([orgId, createdAt])
   @@index([userId, createdAt])
+  @@index([partnerSeatId, createdAt])
   @@index([action, createdAt])
 }
 ```
+
+**Actor resolution:** exactly one of `userId` or `partnerSeatId` is set. When `partnerSeatId` is non-null, the audit UI displays "via [Partner Org Name] partner seat" — the action originated from a partner acting on a client org via a `PartnerSeat`, and there's no local `User` row for the partner in the client org. Same pattern applies to `ActivityLog.source = "partner_seat"` + a `partnerSeatId String?` field there. (`ActivityLog.source` is otherwise a string; valid values are listed in §14.)
 
 ### Baseline events every app logs
 
@@ -1322,6 +1457,9 @@ model AuditLog {
 - `permission.changed` — when a role's permission set is modified
 - `partner_seat.added`
 - `partner_seat.removed`
+- `partner.payout_email_changed` — security event (PayPal email controls real money flow)
+- `auth.disposable_override_added` — CSR allowed a disposable email domain (§3.3)
+- `auth.disposable_override_removed`
 
 ### App-specific extensions
 
@@ -1391,13 +1529,18 @@ GDPR Article 17 requires deletion "without undue delay." The 30-day grace exists
 
 We use the **tombstone model**: the `User` row survives but PII is nulled. This keeps foreign keys intact (avoiding orphaned `Referral`, `ActivityLog`, `AuditLog` rows) while removing the personal data.
 
-**What gets nulled / deleted:**
+**Order of operations is critical** to avoid a race where the local row is tombstoned but the Clerk delete fails — leaving the user able to log in via Clerk and silently un-tombstone themselves on next request:
+
+1. **Clerk delete first** — call `clerk.users.deleteUser(clerkUserId)` and **wait for confirmation**. On failure (network, rate limit, Clerk API down), the deletion job exits without touching local state and re-queues with backoff. **Tombstoning never starts until Clerk confirms the delete.**
+2. **Local tombstone second** — only after Clerk confirms, perform the local mutations below in a single transaction.
+3. **Failed Clerk deletes** — after 8 retry attempts (1m, 5m, 15m, 1h, 6h, 12h, 24h, 24h), the deletion request moves to a dead-letter queue. The user stays alive in Clerk; an alert fires to ops; manual intervention required. Better to fail loud than half-delete.
+
+**Local mutations (only after Clerk confirms):**
 
 - `User.email` → `null`
 - `User.name` → `null`
 - `User.clerkUserId` → `null`
 - `User.deletedAt` → set to current timestamp (marks as tombstone)
-- **Clerk user** — deleted via `clerk.users.deleteUser()`
 - `ActivityLog.createdBy` rows referencing this user — preserved (the `createdBy` is a `User.id`, which still exists; the user's PII is just gone)
 - `AuditLog.userId` rows — same; the local ID survives, the PII does not
 - `Notification` rows for this user — deleted
@@ -1630,7 +1773,12 @@ Every app exposes `GET /health`:
 }
 ```
 
-Returns 200 if all critical checks pass, 503 if any critical check fails. Load balancers ping this for liveness. Sub-checks help debugging without manual intervention.
+**Critical vs informational sub-checks:**
+
+- **`database` is the only critical check.** If the DB is unreachable, the app cannot serve requests — return 503 so the load balancer takes the instance out of rotation.
+- **All other sub-checks are informational** (`clerk`, `resend`, `dispatch`, `throttle`, etc.). The app continues serving traffic even if Resend is down — login still works, dashboards still load, only the email-send path degrades. The status string for these can be `ok | degraded | down`, but `503` is reserved for database failure.
+
+This prevents minor third-party hiccups from cascading into total app outage via overzealous LB routing.
 
 ### Cron conventions
 
@@ -1673,6 +1821,8 @@ Standard scheduled jobs every app may need:
 - Deletion grace period sweep (§15.2)
 - Stale API key reminder (§13)
 - Activity log cold-storage migration (§14)
+- **Stale notification cleanup** — delete read `Notification` rows older than 90 days; unread rows kept indefinitely (or per app policy). Prevents the table from growing unbounded.
+- **Abandoned partner-trial-org cleanup** — delete pre-created partner trial orgs after 14 days if the invited client never signed in (§7).
 
 ### Database migrations
 
@@ -1757,6 +1907,109 @@ Tooling: `axe-core` integrated via `@axe-core/playwright` in E2E tests, or as a 
 
 This is a *commitment*, not a one-time checklist — every new component or page is built to meet AA. If a feature can't, we don't ship it; we redesign.
 
+### Standard env var names
+
+One canonical name across every app — prevents future divergence:
+
+| Env var | Purpose |
+|---|---|
+| `APP_VERSION` | Release identifier; surfaced via `/health.version` and Sentry `release` |
+| `NODE_ENV` | `development` / `staging` / `production` |
+| `DATABASE_URL` | Postgres connection |
+| `CLERK_PUBLISHABLE_KEY` | Clerk public key |
+| `CLERK_SECRET_KEY` | Clerk admin SDK key |
+| `CLERK_WEBHOOK_SECRET` | Clerk webhook signature verification (§3.8) |
+| `SENTRY_DSN` | Per-app Sentry project DSN |
+| `RESEND_API_KEY` | Resend transactional email |
+| `RESEND_FROM_ADDRESS` | Default sender, e.g. `Foundry IMS <orders@ims.foundryims.com>` |
+| `DISPATCH_API_URL` | Dispatch Tickets endpoint (§10) |
+| `DISPATCH_API_KEY` | Per-app Dispatch secret |
+| `DISPATCH_BRAND_ID` | Per-app Dispatch brand identifier |
+| `THROTTLE_API_URL` ⏸️ | Throttle endpoint (per §23) |
+| `THROTTLE_API_KEY` ⏸️ | Throttle admin key |
+| `THROTTLE_WEBHOOK_SECRET` ⏸️ | Throttle webhook signature verification |
+| `UPSTASH_REDIS_URL` | Rate-limit + lock backing store (§22) |
+| `UPSTASH_REDIS_TOKEN` | |
+| `INTERNAL_API_KEY` | Cross-service secret for internal-only endpoints |
+| `<APP>_API_KEY_PREFIX` | The key prefix this app uses (e.g., `fims_` for Foundry) |
+
+Apps may add their own (third-party integrations, app-specific feature flags). Names of standard things must match this table.
+
+### Secret rotation policy
+
+Every secret has a documented rotation cadence. Default policies:
+
+| Secret | Rotation cadence | Notes |
+|---|---|---|
+| **API keys** (`<app>_*`) | User-managed; UI surfaces stale-key reminder at 90 days (§13). Mandatory rotation on suspected compromise. | Owners / admins via Settings → API Keys |
+| **Webhook secrets** | User-managed via `POST /webhooks/:id/rotate-secret` (§12) with 24h dual-sign window | Mandatory rotation on suspected compromise |
+| **`CLERK_SECRET_KEY`** | Annually + on suspected compromise. Requires coordinated env update across all environments running the app | Recovery: Clerk dashboard → Rotate key |
+| **`CLERK_WEBHOOK_SECRET`** | Annually + on suspected compromise. Coordinate with restart of webhook handler instances | |
+| **`RESEND_API_KEY`** | Annually + on suspected compromise | |
+| **`DISPATCH_API_KEY`** | Annually + on suspected compromise | |
+| **`THROTTLE_API_KEY`** ⏸️ | Annually + on suspected compromise | |
+| **`INTERNAL_API_KEY`** | Annually + on every team-member offboarding with knowledge of the secret | |
+
+**Compromise-driven rotation always wins.** If a secret is suspected compromised, rotate immediately regardless of cadence. Document the rotation in the §14.5 audit log and notify affected stakeholders.
+
+### Uptime monitoring
+
+Sentry catches errors but doesn't tell you "is the API reachable at all." Every production app subscribes to an uptime monitoring service that pings `/health` from outside the VPC.
+
+**Standard service:** [Better Uptime](https://betteruptime.com) (per-app monitor, alerts to Slack / email / SMS). Apps may substitute Pingdom, Cloudflare Health Checks, or AWS Synthetic Canaries with documented justification.
+
+Alert thresholds:
+- **Down for 60s** — page on-call.
+- **Status page incident auto-created** — public-facing status page reflects outage to customers in real time.
+
+### Email warmup
+
+When a new app sets up its Resend sender domain, **the marketing team needs a 2-week warmup ramp** before high-volume sends. Without it, ESPs (Gmail, Outlook) flag the domain as suspicious and bounce-rate spikes.
+
+Plan a warmup window in the new-app launch timeline:
+- Week 1: ≤100 emails/day, monotonically increasing
+- Week 2: ramp to expected steady-state volume
+- Configure SPF, DKIM, DMARC at DNS level **before** the first send. Resend's onboarding has a checklist; follow it.
+
+### Testing standards
+
+Every app has, at minimum:
+
+- **Integration tests for auth + core domain.** Auth tests cover signup, login, org switching, leave/close. Core domain tests cover the app's primary user-facing flows (Foundry: import + product creation; Dispatch: ticket lifecycle; Rally: attribution match).
+- **No coverage target imposed by the standard.** Apps set their own per-domain coverage based on risk. The standard's only requirement is that the auth + RBAC paths are covered; everything else is per-app judgment.
+- **CI runs the integration suite on every PR.** Failing tests block merge.
+- **No global mocking of Clerk in tests.** Use Clerk's test JWTs or a per-test mock at the boundary; mocking the entire `ClerkGuard` defeats the purpose.
+
+### Shared library packaging
+
+Shared dev dependencies (`@epic/disposable-emails`, `@epic/sentry-config`, `@epic/email-templates`, `@epic/cookie-consent`, future `@epic/eslint-plugin-tenancy`) are published to a **private GitHub Packages registry** scoped to the `Epic-Design-Labs` org.
+
+Apps consume them by:
+
+1. Adding the registry to `.npmrc`:
+   ```
+   @epic:registry=https://npm.pkg.github.com
+   //npm.pkg.github.com/:_authToken=${GITHUB_PACKAGES_TOKEN}
+   ```
+2. `npm install @epic/<package>` like any other dep.
+3. Setting `GITHUB_PACKAGES_TOKEN` in CI (PAT with `read:packages` scope).
+
+Versioning: shared libraries use semver; breaking changes go to a new major version with a 1-month deprecation window for the old major.
+
+Source-of-truth repo: `Epic-Design-Labs/shared-libraries` (a single monorepo, Yarn workspaces). Each library is its own publishable package within.
+
+### API versioning scope
+
+`/api/v1/` (§17.5) refers to the **customer-facing public API** — endpoints third parties integrate with using API keys.
+
+**Internal admin BFF routes** (`app.<domain>/api/*` — Next.js API routes, server actions, admin-only endpoints) are NOT versioned. They co-deploy with the admin frontend, schema changes are coordinated within the same PR, and no third party consumes them. Adding `/v1/` to admin BFF paths is overhead with no benefit.
+
+Customer-facing API routes ALWAYS go through `api.<domain>/api/v1/`. Admin-only BFF routes stay at `app.<domain>/api/...` without a version segment.
+
+### Mobile / PWA
+
+Out of scope for v3 standardization. App-by-app decision, no shared pattern, no mandatory commitment.
+
 ### Throttle webhook stub (placeholder until billing doc lands)
 
 While Throttle integration is ⏸️ blocked, every app should reserve the webhook endpoint shape so adoption is a code change, not a schema migration:
@@ -1805,7 +2058,11 @@ Every marketing site must:
 4. **Have a "Sign Up Free" or "Get Started" CTA** that points at `app.<domain>/signup` directly (not `/login`).
 5. **`/partners` landing page** 🧭 — explains the partner program.
 6. **`/partners/apply` form** 🧭 — submits to API.
-7. **Cookie consent banner** — no analytics cookies set without explicit consent. The affiliate cookie is *intended* to fall under the "strictly necessary / functional" exemption, but **EU regulators have been narrowing this exemption** for marketing-purpose cookies. Status: **pending legal sign-off**. Until that lands, apps targeting EU traffic should treat the affiliate cookie as consent-required and surface it in the consent banner alongside analytics. Document the stance per app.
+7. **Cookie consent banner** — every marketing site that targets EU traffic implements a consent banner. **Standard library: `@epic/cookie-consent`** (shared dev dependency, see §1) — handles the banner UI, consent storage, and exposes a `hasConsent('functional' | 'analytics' | 'marketing')` API the rest of the site code reads before setting any cookies.
+
+The affiliate `?r=` cookie is **categorized as "functional"** (Recital 30 / strictly-necessary exemption) — set without explicit opt-in, surfaced in the banner's "what we use" disclosure. Analytics and marketing cookies require explicit opt-in. **Legal sign-off on the functional categorization is still pending** for affiliate-specific use; until cleared, apps targeting EU traffic should re-categorize the affiliate cookie as "marketing" and require opt-in to be safe.
+
+Apps not targeting EU traffic may skip the banner entirely; document that decision per app.
 
 Reference: `astro-foundryims/src/layouts/Layout.astro`. Cookie capture and link rewriting:
 
@@ -1870,13 +2127,16 @@ When bootstrapping the next app, replicate in this order:
 ### Foundation
 - [ ] **Root domain registered** + DNS configured per §19
 - [ ] **Clerk projects: prod + staging** with the §3.1 dashboard config (`force_organization_selection: false`)
+- [ ] **Clerk webhooks** wired with `CLERK_WEBHOOK_SECRET` per §3.8 (`user.deleted`, `organization.deleted`, `user.updated`, `session.created`, membership events)
 - [ ] **Sentry project** + `instrument.ts` + `@epic/sentry-config` per §17 — `APP_VERSION` env var
-- [ ] **Resend workspace** + sender domain per §9
+- [ ] **Resend workspace** + sender domain + 2-week email warmup window planned per §9 / §17.6
+- [ ] **Better Uptime monitor** (or equivalent) for `/health` per §17.6
 - [ ] **`Organization` + `User` models** per §3.4 (include `accountType`, `affiliateCode` on Organization, `deletedAt` on User, NO `@unique` on `clerkUserId`, nullable `email` / `name` / `clerkUserId` for tombstones)
-- [ ] **`ClerkGuard`** with permission re-validation per §3.5 and §16
+- [ ] **`ClerkGuard`** with permission re-validation + opportunistic Clerk metadata sync per §3.5 / §3.6 / §16
 - [ ] **Disposable email blocking** at signup per §3.3
 - [ ] **Smooth signup path** — auto-create org on first load per §3.2
 - [ ] **Per-environment isolation** — staging Clerk + Sentry env tag + per-env DB per §17.5
+- [ ] **Standard env var names** match the §17.6 table
 
 ### Core features
 - [ ] **Org create / switch / leave / close flows** per §3.8
@@ -1908,6 +2168,9 @@ When bootstrapping the next app, replicate in this order:
 - [ ] **WCAG 2.1 AA conformance** baseline per §17.5
 - [ ] **English-only** for v1 — no preemptive i18n wrapping per §17.5
 - [ ] **Throttle `BillingEvent` table reserved** + signed webhook stub per §17.5
+- [ ] **Secret rotation runbook** per §17.6 (annual cadence + compromise-driven)
+- [ ] **Integration test suite** for auth + core domain per §17.6 (CI gate)
+- [ ] **Shared library access** — `.npmrc` + `GITHUB_PACKAGES_TOKEN` for `@epic/*` packages per §17.6
 
 ### Deferred (build when ready, schema reserves now)
 - [ ] **Outbound webhook infrastructure** per §12 — `Webhook` + `WebhookDelivery` models in initial schema even if not wired
@@ -1940,7 +2203,7 @@ When bootstrapping the next app, replicate in this order:
 
 11. **Privacy and deletion are first-class.** Right-to-deletion is built in, not bolted on. PII is in nullable fields only. Activity logs reference user IDs, not emails. Audit logs use HMAC for any necessary email hashes. Backups have documented 30-day retention with deletion-rerun-on-restore.
 
-12. **Defense in depth on tenancy.** Every query filters by `orgId`. Every API request is scoped to the caller's active org. **PR review checklist** treats unscoped `find*`/`update*`/`delete*` on org-owned tables as a bug. (`@epic/prisma-tenancy-lint` — a CI rule that flags unscoped queries automatically — is a 🧭 future tool, not yet built. Until it ships, manual review is the enforcement mechanism.) Postgres RLS as a future hardening layer.
+12. **Defense in depth on tenancy.** Every query filters by `orgId`. Every API request is scoped to the caller's active org. **PR review checklist** treats unscoped `find*`/`update*`/`delete*` on org-owned tables as a bug. The future tool is **`@epic/eslint-plugin-tenancy`** (custom ESLint rule using TypeScript AST + Prisma schema introspection to flag unscoped queries on org-owned tables) — 🧭 not built yet. Until it ships, manual review is the enforcement mechanism. Postgres RLS as a future hardening layer.
 
 13. **PII boundaries are explicit.** No PII in Sentry tags, URL paths, log lines, or aggregate analytics. PII lives in `User`, `Organization`, and explicit snapshot fields only.
 
@@ -1959,7 +2222,7 @@ Every public surface is rate-limited. Usage metrics are exposed so users see con
 | Surface | Limit | Notes |
 |---|---|---|
 | **Per-IP signup attempts** | 10 / hour | Blocks bot signup farms; doesn't friction real users. |
-| **Per-API-key request budget** | Standardize concept; numbers in Throttle billing tier doc | Tier-based; lower tiers get lower budgets. |
+| **Per-API-key request budget** | **Default for free / no-billing apps: 10,000 requests / hour per key.** Tier-based numbers come from the Throttle billing doc when it ships. | Apps without billing yet have a usable default; Throttle-driven tiers override when ready. |
 | **Per-org webhook deliveries (outbound)** | 1000 / minute baseline | Configurable higher for ecommerce-heavy customers. |
 | **Per-org Sentry error submission** | 1000 errors / minute | App-side cap on what we submit to Sentry — defends Sentry budget against runaway error loops in our own code. (Sentry has its own quota separately; this is upstream of that.) |
 | **Per-IP affiliate `/attribute`** | 30 / hour | Anti-fraud; blocks attribution farming. |
