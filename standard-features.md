@@ -1,4 +1,4 @@
-# Epic Design Labs — Standard Features (v3)
+# Epic Design Labs — Standard Features (v3.1)
 
 **Canonical reference** for the foundational features every Epic Design Labs app should have. New apps adopt this whole stack so users get a consistent experience — same login, same org model, same affiliate program, same support widget — across the whole portfolio.
 
@@ -21,6 +21,22 @@
 - 📋 **Proposed** — New in v3; not yet implemented anywhere
 
 **Reference implementation:** Foundry IMS (api: `Epic-Design-Labs/app-foundry-ims-api`, admin: `app-foundry-ims-admin`, marketing: `astro-foundryims`). Foundry is the most current implementation; if you find a better pattern, propose a standard update rather than diverging silently.
+
+### Changes in v3.1
+
+Tightening pass on v3 — no architectural reversals, several gaps closed:
+
+- **§3.1 / §3.2** — flipped Clerk's `force_organization_selection` to `false` and clarified the auto-create-on-first-load flow (v3 had these settings contradicting each other).
+- **§3.4** — explicit migration note for making `User.email/name/clerkUserId` nullable in apps that started with required columns.
+- **§3.6** — pinned the Clerk metadata sync direction (one-way, write-on-change, eventually consistent / advisory).
+- **§7** — `PartnerSeat` is now created at trial creation (not just at promotion), so the Partner Dashboard has a single source of truth.
+- **§7** — white-label commission reframed as a 10% **discount netted at source** rather than a paid commission, removing the 1099 / tax-form gross-up problem.
+- **§12** — webhook secret rotation has a 24-hour dual-signing overlap window so in-flight deliveries don't break.
+- **§15.2** — added an immediate-delete option for users invoking right-to-erasure without grace period; backup retention acknowledges compliance-driven extensions beyond 30 days.
+- **§17** — explicit "PII never in log lines" rule, hosting-agnostic (CloudWatch, Render, Cloudflare, Vercel, etc.).
+- **§17.5** — added Environments (preview / staging / prod), Seed conventions (Futurama theme), Internationalization, Accessibility (WCAG 2.1 AA), and Throttle webhook stub.
+- **§22** — picked `@upstash/ratelimit` as the default library; clarified the Sentry rate cap is app-side defense against runaway error loops, separate from Sentry's own quota.
+- **§20 checklist** — expanded with the new items.
 
 ---
 
@@ -114,18 +130,19 @@ Required settings in every Clerk project:
 - **Sign-up enabled** — open self-serve signup. (Restrict via Clerk's allowlist if you need invite-only later.)
 - **Magic link, Google, Apple** sign-in methods enabled.
 - **Organizations enabled.**
-- **`force_organization_selection: true`** — every user must pick or create an org during signup.
-- **`automatic_organization_creation: false`** — Clerk doesn't auto-create on signup; we control that flow ourselves.
+- **`force_organization_selection: false`** — let users land in the app immediately after signup; we auto-create an org in code (see §3.2).
+- **`automatic_organization_creation: false`** — Clerk doesn't auto-create either; we control the flow so we can also write the local Org row + send the right magic link.
 - **Organization name template** — `"{{user.first_name}}'s Organization"` (fallback `"My Organization"`).
 - **2FA / passkeys enabled** at the Clerk level for every app.
 
 ### 3.2 Smooth signup path (avoid conversion drag)
 
-`force_organization_selection: true` + `automatic_organization_creation: false` is conversion drag if implemented as an extra screen. The standard flow:
+Showing prospects a "Create your organization" screen between signup and the dashboard is conversion drag. We avoid it by combining `force_organization_selection: false` (Clerk doesn't gate on org selection) with our own auto-create on first dashboard load.
 
 1. User signs up via Clerk's hosted UI (magic link / Google / Apple).
-2. On first authenticated load of the admin app, **automatically create an org** named `"<First Name>'s Workspace"` via `clerk.organizations.createOrganization` if the user has zero memberships.
-3. Land directly on the dashboard.
+2. Clerk session is live with zero memberships.
+3. On first authenticated load of the admin app, **automatically create an org** named `"<First Name>'s Workspace"` via `clerk.organizations.createOrganization` if the user has zero memberships, then `setActive` it.
+4. Land directly on the dashboard.
 
 No extra "create your org" screen unless the user already has multiple orgs and is choosing between them. Org rename is available later in Settings.
 
@@ -188,7 +205,7 @@ enum UserRole {
 **Schema notes:**
 
 - `User.clerkUserId` is **indexed but NOT unique**. A Clerk user that's a member of three orgs has three local `User` rows, all with the same `clerkUserId`. A `@unique` constraint blocks this. (Evident hit this exact bug during their migration.)
-- `User.email`, `User.name` are **nullable** to support GDPR tombstoning (§15). PII is nulled on deletion; the row itself survives so foreign keys keep working.
+- `User.email`, `User.name`, `User.clerkUserId` are **nullable** to support GDPR tombstoning (§15). PII is nulled on deletion; the row itself survives so foreign keys keep working. **Migration note:** apps that started with `email String` (required) — including Foundry — need an audited `ALTER TABLE` to make these columns nullable. The `@@unique([orgId, email])` constraint continues to work; Postgres allows multiple NULLs in unique constraints by default.
 - The shift from per-user to per-org affiliate codes is locked in for v3. The `User.affiliateCode` field is reserved for migration only.
 
 ### 3.5 ClerkGuard + permission re-validation
@@ -210,7 +227,9 @@ Some fields exist in both Clerk and the local DB (`accountType`, `role`, org mem
 - **Clerk is canonical for auth + org membership.** Local DB is a read cache.
 - **Local DB is canonical for `role` and `accountType`.** Clerk metadata is a downstream sync target.
 
-If a divergence is detected during permission re-validation, log to Sentry at `warn` and reconcile the loser to match the winner. Direct edits to Clerk metadata during incidents will be overwritten by the local DB on next sync.
+**Sync direction is one-way and write-on-change.** When local `role` or `accountType` changes (admin promotes a user, partner application is approved), we write the new value to Clerk metadata in the same transaction. We do **not** poll or sync from Clerk back to local. Treat Clerk metadata as **eventually consistent / advisory** — the frontend may read it for UI hints (`useUser().publicMetadata`), but the API always re-validates against the local DB. Direct edits to Clerk metadata via the dashboard during incidents will get overwritten on the next local update for that user.
+
+If a divergence is detected during permission re-validation, log to Sentry at `warn` and reconcile by reading the local DB and writing to Clerk.
 
 ### 3.7 Org switcher (header dropdown)
 
@@ -387,6 +406,8 @@ model Referral {
 
 **Schema fix from v2:** `Referral.referrerOrgId` is a local `Organization.id`, not a Clerk ID. (v2 had `referrerUserId` referencing a Clerk user ID, which is unstable across instance recreation and breaks GDPR deletion.)
 
+When constructing a Referral row from a user action (e.g., affiliate attribution or partner trial creation), resolve the referring user's local `User.orgId` and use that — not `partner.organizationId` shorthand, which doesn't exist as a literal field on the user.
+
 ### Status state machine
 
 ```
@@ -548,18 +569,30 @@ On submit:
   1. clerkService.createOrganization({ name: <company> })
   2. clerkService.findOrCreateUserByEmail(<client_email>)
   3. clerkService.createInvitation(clerkOrgId, client_email)
-  4. localUser = create User for partner with role: OWNER in the new org
+  4. localUser = create User for partner with role: OWNER in the new client org
   5. Partner is the OWNER (Clerk org:admin) of the trial org
-  6. prisma.referral.create({
-       referrerOrgId: partner.organizationId,
+  6. prisma.partnerSeat.create({
+       clientOrgId: localOrg.id,
+       partnerOrgId: partnerUser.orgId,                  // partner's own org
+       permissions: { tier: "admin" },                    // co-exists with their OWNER role
+       addedByUserId: partnerUser.id,
+     })
+  7. prisma.partnerSeatAssignment.create({               // creator gets the seat assigned
+       partnerSeatId: seat.id,
+       partnerUserId: partnerUser.id,
+     })
+  8. prisma.referral.create({
+       referrerOrgId: partnerUser.orgId,
        referredOrgId: localOrg.id,
        referralType: "direct",
-       affiliateCode: partner.affiliateCode,
+       affiliateCode: partnerOrg.affiliateCode,
        status: "pending"
      })
 
 Client → clicks invite link → Clerk signup → joins the pre-created org as a member
 ```
+
+**Why create the PartnerSeat at trial creation, not just at promotion:** Without it, the dashboard's "list this partner's client orgs" query has to UNION (`Users where role=OWNER and accountType=partner`) with `PartnerSeats` — two sources of truth for the same conceptual relationship. Creating the seat upfront makes `PartnerSeat` the canonical answer; OWNER is just an additional role the partner happens to hold during a white-label arrangement.
 
 **Audit trail during partner-controlled trial:** All `ActivityLog` entries during this period must be tagged `source: "partner_seat"` to distinguish partner-attributed actions from client-attributed actions. This creates a clear audit trail for any disputes about what was done before the client took ownership.
 
@@ -573,7 +606,7 @@ The partner pays the subscription fee on the client's behalf as part of an all-i
 
 - Partner stays as `OWNER` of the client org.
 - Partner's payment method is on file in Throttle.
-- **Partner still earns 10% commission** on the org's subscription fee — even though they're paying it themselves. This makes the white-label model economically viable: the partner's effective net cost is 90% of the listed price, which can be bundled into their service pricing.
+- **Partner receives a 10% white-label discount on the bill** — netted at source, not paid out as commission. (Earlier drafts described this as a self-paid commission; that route creates a 1099 / tax-form gross-up problem where the partner reports income they're really just netting against an expense. Discount-at-source delivers identical economics with cleaner accounting.) Throttle invoices the partner at 90% of list price for white-label-mode subscriptions.
 - The client may not have visibility into the bill (this is a partner choice).
 
 #### Path B: Promote client to owner
@@ -584,10 +617,10 @@ The partner promotes the client user to OWNER. Partner becomes a `PartnerSeat` a
 - Dialog confirms: "This will transfer ownership of `<Client Org>` to `<client@email.com>`. You will retain a partner seat with `<role>` permissions."
 - On confirm:
   - Clerk org membership: client user promoted to `org:admin`, partner user demoted.
-  - Local: client user `role` set to `OWNER`. Partner user removed from local `User` table for that org (they retain access via `PartnerSeat`).
+  - Local: client user `role` set to `OWNER`. Partner user removed from local `User` table for that org (they retain access via the existing `PartnerSeat` row, created at trial creation).
   - Throttle billing setup flow surfaces to the client.
   - `Referral.status` will transition `active` → `converted` when the client's first invoice is paid.
-- Partner continues to earn 10% commission on client's bill.
+- Partner continues to earn 10% commission on client's bill (paid out as commission since the client now pays the bill, not as discount).
 
 ### Client-initiated ownership claim (escape hatch via support)
 
@@ -991,6 +1024,18 @@ X-Epic-Timestamp: <unix_seconds>
 
 **Request timeout: 10 seconds.** Non-2xx response = failure.
 
+### Secret rotation
+
+When a webhook owner calls `POST /webhooks/:id/rotate-secret`, the new secret is returned once and stored. To avoid breaking in-flight deliveries (worker has the old secret in memory while customer rotates):
+
+- **Both old and new secrets sign for a 24-hour overlap window.** The header carries multiple `v1` segments:
+  ```
+  X-Epic-Signature: t=<ts>,v1=<hex_with_new>,v1=<hex_with_old>
+  ```
+- Customers verify against either value. Once they confirm new-secret-only deliveries are working, no migration on their end is required.
+- After 24 hours, the old secret is dropped from signing. Subsequent deliveries carry only `v1=<hex_with_new>`.
+- Schema: store `secret` (current) and `previousSecret` + `previousSecretValidUntil` on the `Webhook` row.
+
 ### Retry policy and warnings
 
 - **Up to 8 attempts** with exponential backoff: 1m, 5m, 15m, 1h, 6h, 12h, 24h, 24h
@@ -1253,6 +1298,10 @@ DELETE /users/me/request-deletion
 5. During the grace period, the user can cancel via Settings → Privacy.
 6. After 30 days, a scheduled job runs the deletion procedure.
 
+#### Immediate deletion (no grace period)
+
+GDPR Article 17 requires deletion "without undue delay." The 30-day grace exists for the user's protection — but the user can opt out of it. The Privacy page includes a **"Delete immediately"** option behind a stronger confirmation gate (re-type email + checkbox: "I understand this is irreversible and there is no recovery period"). When chosen, the deletion job runs within 24 hours instead of 30 days. Use this for users who explicitly invoke their right to immediate erasure.
+
 #### Tombstone deletion model
 
 We use the **tombstone model**: the `User` row survives but PII is nulled. This keeps foreign keys intact (avoiding orphaned `Referral`, `ActivityLog`, `AuditLog` rows) while removing the personal data.
@@ -1282,9 +1331,14 @@ We use the **tombstone model**: the `User` row survives but PII is nulled. This 
 GDPR requires backups be re-scrubbed or excluded from restoration in a documented way.
 
 **Standard policy:**
-- **Backups expire after 30 days.** No backup older than 30 days exists in any system.
+- **Backups expire after 30 days by default.** No general-purpose backup older than 30 days exists in any system.
 - **On any restoration from backup, the deletion job is re-run** before the restored database goes live. Documented runbook required.
 - This is the most-failed audit point in real GDPR enforcement; it MUST be in the runbook.
+
+**Compliance-driven extensions:** Apps processing financial, medical, or other regulated data may be required to retain backups longer (often 7 years for financial / SOX, varies for healthcare). When that's the case:
+- Document the retention requirement and its legal basis in the app's compliance runbook.
+- The deletion-on-restore obligation still applies — every restore from a long-retained backup re-runs the deletion job for any users whose deletion completed before the backup snapshot.
+- Long-retained backups should live in encrypted, access-restricted cold storage with audit logging on access.
 
 #### Confirmation audit
 
@@ -1414,7 +1468,7 @@ SENTRY_DSN=<per-app DSN>
 APP_VERSION=<git sha or release tag>
 ```
 
-(One env var name across all apps: `APP_VERSION`. Foundry currently uses `SENTRY_RELEASE` — audit item to align.)
+**Canonical env var: `APP_VERSION`** for the release identifier across every app. (Foundry currently uses `SENTRY_RELEASE` — audit item to rename.)
 
 ### Logging conventions
 
@@ -1424,6 +1478,22 @@ APP_VERSION=<git sha or release tag>
 | `warn` | Recoverable failures, degraded behavior, configuration gaps, retried operations |
 | `info` | Significant business events (org created, partner trial started), abuse signals (disposable email blocked) |
 | `debug` | Development-only diagnostics |
+
+### PII never goes into log lines
+
+Application logs land in whatever sink the host provides — CloudWatch (AWS / ECS / Lambda), Render's log viewer, Cloudflare Logs / Tail Workers, Vercel's runtime logs, etc. Different sinks, same rule:
+
+**Never log PII.** Pass IDs and resolve in tools.
+
+```ts
+// ❌ Bad — email lands in the log sink
+logger.log(`User ${user.email} requested deletion`);
+
+// ✅ Good — only IDs hit the sink
+logger.log(`Deletion requested by user`, { userId: user.id, orgId: user.orgId });
+```
+
+This rule is hosting-agnostic: it applies the same way whether logs flow into AWS CloudWatch, Render, Cloudflare, Vercel, or wherever the next app lands. Sentry redaction (above) is a safety net for when logs do reach Sentry; the primary defense is not logging PII in the first place.
 
 ### Required Sentry tags
 
@@ -1518,6 +1588,100 @@ Standardized on **Prisma migrations** across the portfolio:
 - Breaking changes go to `/api/v2/`
 - Version sunset announced via headers (`Sunset:`, `Deprecation:`) at least 6 months before removal
 
+### Environments (preview / staging / production)
+
+Every app runs at least three environments:
+
+| Environment | Clerk | Sentry | Database | Hosting |
+|---|---|---|---|---|
+| **Production** | Per-app prod Clerk project | Per-app Sentry project (env tag `production`) | Production primary | Per-app choice |
+| **Staging / preview** | **Per-app staging Clerk project** (separate from prod) | Same Sentry project, `environment: "staging"` tag | Per-environment DB (no prod data) | Per-app choice |
+| **Local dev** | Clerk dev instance | Sentry disabled or `environment: "development"` | Local DB | Local |
+
+**Hosting is a per-app choice.** Render, Vercel, Cloudflare Workers, AWS, Neon for Postgres — apps pick what fits their workload. The standard locks down the *identity* boundaries (separate Clerk project per environment, Sentry env tags, no prod data in lower envs), not the runtime.
+
+Critical rules:
+- **Preview / staging never points at production Clerk.** Avoids accidentally provisioning real users into Clerk dev with prod credentials, and keeps trial signups from polluting prod analytics.
+- **Preview / staging never reads production data.** Use anonymized staging snapshots or seeded fixtures (see Seed Conventions below).
+- **Same `app_version` and Sentry release across environments**, distinguished by the `environment` tag — so a release rolls through dev → staging → prod with traceable telemetry.
+
+### Seed conventions (Futurama theme)
+
+Every app ships a seed script that populates a `test` instance with realistic-but-obviously-fake data. **Standard theme: Futurama.** Fry is an OWNER, Leela is an ADMIN, Bender is a MEMBER, the Professor is a VIEWER, Planet Express is the org name, etc. Each app maps Futurama into its own domain:
+
+- Foundry IMS: Planet Express has products (slurm, popplers), suppliers (Mom's Friendly Robot Co.), warehouses, orders.
+- Dispatch: Planet Express has tickets ("Where's my package, the package is in space"), the Professor as a partner seat.
+- Rally: Planet Express tracks attribution for their delivery ad spend.
+
+Why this matters:
+- **Same canonical fixture set across apps** makes onboarding new devs faster — they recognize the cast immediately.
+- **Obvious that it's fake.** No risk of mistaking seed records for real customers.
+- **Nice to demo with.** Screenshots and Loom videos with Futurama fixtures look intentional, not amateur.
+
+Convention: `scripts/seed-test.ts` (or app-equivalent) creates a complete `test` org wired with the Futurama cast, runnable locally and in CI. Each role has at least one Futurama character, every entity type has at least one example.
+
+### Internationalization (i18n)
+
+**v1 of every app is English-only.** No i18n framework, no locale switching, no per-region copy. This is a deliberate scope decision — adding i18n later is mechanical (wrap user-facing strings in a translation function); adding it preemptively introduces complexity without payoff.
+
+When an app has a justifiable i18n need (specific market, regulatory copy translation, customer demand), the standard adoption is:
+- **Library:** `next-intl` (Next.js apps) or `astro-i18n` (Astro marketing sites).
+- **Locale data lives next to source** — `src/locales/en.json`, `src/locales/es.json`. Not a separate repo.
+- **English is canonical.** Other locales are translations of the English source — never the reverse.
+- **Date/number formatting** uses `Intl.*` APIs, not custom logic.
+
+Until that need lands, English-only stays the standard. Don't preemptively wrap strings.
+
+### Accessibility (WCAG 2.1 AA)
+
+Every app commits to **WCAG 2.1 Level AA conformance** as the minimum. This is the bar most enterprise procurement teams + government buyers expect; falling below blocks deals.
+
+Practical baseline:
+- **Keyboard navigation** through every interactive surface — no mouse-only widgets.
+- **Visible focus indicators** on every focusable element (Tailwind's `focus-visible:` is fine).
+- **Sufficient contrast ratios** — 4.5:1 for body text, 3:1 for large text. Tailwind's default palette mostly clears this; verify when picking a brand color.
+- **`<label>` associations** on every form input.
+- **Alt text** on every meaningful image; empty `alt=""` on decorative ones.
+- **ARIA only when native HTML can't express the semantic.** Don't add ARIA-soup to elements that are already semantic.
+
+Tooling: `axe-core` integrated via `@axe-core/playwright` in E2E tests, or as a manual audit step before major releases. CI gate is optional but encouraged.
+
+This is a *commitment*, not a one-time checklist — every new component or page is built to meet AA. If a feature can't, we don't ship it; we redesign.
+
+### Throttle webhook stub (placeholder until billing doc lands)
+
+While Throttle integration is ⏸️ blocked, every app should reserve the webhook endpoint shape so adoption is a code change, not a schema migration:
+
+```ts
+// POST /webhooks/throttle (per-app endpoint, signed by Throttle)
+// Standard Throttle event shape (subject to confirmation in the billing doc):
+{
+  id: "evt_...",
+  type: "subscription.created" | "subscription.updated" | "subscription.canceled"
+      | "invoice.paid" | "invoice.payment_failed" | "trial.ending" | "trial.expired",
+  data: { /* Throttle resource snapshot */ },
+  occurredAt: "<ISO 8601>",
+}
+```
+
+Reserve a `BillingEvent` table to log inbound Throttle events for auditability before processing:
+
+```prisma
+model BillingEvent {
+  id          String   @id @default(uuid())
+  externalId  String   @unique          // Throttle event id (idempotency key)
+  type        String                    // Throttle event type
+  orgId       String?                   // resolved from event payload
+  payload     Json
+  processedAt DateTime?
+  receivedAt  DateTime @default(now())
+
+  @@index([orgId, type])
+}
+```
+
+This lets apps stub the webhook handler now (verify signature, persist event, no-op processing) and wire actual handlers when the billing doc arrives.
+
 ---
 
 ## 18. Marketing Site Contract
@@ -1596,13 +1760,14 @@ When bootstrapping the next app, replicate in this order:
 
 ### Foundation
 - [ ] **Root domain registered** + DNS configured per §19
-- [ ] **Clerk instance** with the §3.1 dashboard config
-- [ ] **Sentry project** + `instrument.ts` + `@epic/sentry-config` per §17
+- [ ] **Clerk projects: prod + staging** with the §3.1 dashboard config (`force_organization_selection: false`)
+- [ ] **Sentry project** + `instrument.ts` + `@epic/sentry-config` per §17 — `APP_VERSION` env var
 - [ ] **Resend workspace** + sender domain per §9
-- [ ] **`Organization` + `User` models** per §3.4 (include `accountType`, `affiliateCode` on Organization, `deletedAt` on User, NO `@unique` on `clerkUserId`)
+- [ ] **`Organization` + `User` models** per §3.4 (include `accountType`, `affiliateCode` on Organization, `deletedAt` on User, NO `@unique` on `clerkUserId`, nullable `email` / `name` / `clerkUserId` for tombstones)
 - [ ] **`ClerkGuard`** with permission re-validation per §3.5 and §16
 - [ ] **Disposable email blocking** at signup per §3.3
 - [ ] **Smooth signup path** — auto-create org on first load per §3.2
+- [ ] **Per-environment isolation** — staging Clerk + Sentry env tag + per-env DB per §17.5
 
 ### Core features
 - [ ] **Org create / switch / leave / close flows** per §3.8
@@ -1623,12 +1788,17 @@ When bootstrapping the next app, replicate in this order:
 - [ ] **`ActivityLogService` + `/activity` page** per §14 (use `User.id` for `createdBy`, NOT email)
 - [ ] **`AuditLogService` + `/audit` page** per §14.5 — all baseline events instrumented
 - [ ] **Data export endpoint + Settings card** per §15.1
-- [ ] **User deletion request flow + Settings → Privacy** per §15.2 (tombstone model, HMAC audit)
-- [ ] **Backup runbook** documenting 30-day expiry + deletion-rerun-on-restore
-- [ ] **Rate limiting** per §22 with usage metrics
+- [ ] **User deletion request flow + Settings → Privacy** per §15.2 (tombstone model, HMAC audit, immediate-delete option)
+- [ ] **Backup runbook** documenting 30-day expiry (or longer if compliance-driven) + deletion-rerun-on-restore
+- [ ] **Rate limiting** per §22 with usage metrics (`@upstash/ratelimit` default)
 - [ ] **Health check** endpoint per §17.5
 - [ ] **Cron jobs** named/logged per §17.5
 - [ ] **`/api/v1/` prefix** per §17.5
+- [ ] **PII never in log lines** — pass IDs, resolve in tools per §17
+- [ ] **Seed script** with Futurama theme — `scripts/seed-test.ts` per §17.5
+- [ ] **WCAG 2.1 AA conformance** baseline per §17.5
+- [ ] **English-only** for v1 — no preemptive i18n wrapping per §17.5
+- [ ] **Throttle `BillingEvent` table reserved** + signed webhook stub per §17.5
 
 ### Deferred (build when ready, schema reserves now)
 - [ ] **Outbound webhook infrastructure** per §12 — `Webhook` + `WebhookDelivery` models in initial schema even if not wired
@@ -1682,7 +1852,7 @@ Every public surface is rate-limited. Usage metrics are exposed so users see con
 | **Per-IP signup attempts** | 10 / hour | Blocks bot signup farms; doesn't friction real users. |
 | **Per-API-key request budget** | Standardize concept; numbers in Throttle billing tier doc | Tier-based; lower tiers get lower budgets. |
 | **Per-org webhook deliveries (outbound)** | 1000 / minute baseline | Configurable higher for ecommerce-heavy customers. |
-| **Per-org Sentry error tracking** | 1000 errors / minute | Prevents error spam from choking observability. |
+| **Per-org Sentry error submission** | 1000 errors / minute | App-side cap on what we submit to Sentry — defends Sentry budget against runaway error loops in our own code. (Sentry has its own quota separately; this is upstream of that.) |
 | **Per-IP affiliate `/attribute`** | 30 / hour | Anti-fraud; blocks attribution farming. |
 | **Per-IP password reset / magic link** | 10 / hour | Anti-brute-force on auth flows. |
 
@@ -1699,9 +1869,8 @@ This is a deliberate operational stance: **rate-limit transparently, not silentl
 
 ### Implementation
 
-- Apps choose their own rate-limiting library (express-rate-limit, fastify-rate-limit, BullMQ, Redis-based)
-- All apps use Redis (or equivalent) as the rate-limit backing store for distributed deployments
-- 429 responses include retry-after headers and structured error bodies
+- **Default library: `@upstash/ratelimit`** with the Upstash Redis backend (or self-hosted Redis if the app already runs one). Edge-friendly, distributed, simple sliding-window primitive. Apps free to substitute (`express-rate-limit + rate-limit-redis`, fastify-rate-limit, etc.) if they have a load-bearing reason — but document the divergence.
+- 429 responses include `Retry-After` headers and structured error bodies (`{ error: "rate_limited", retryAfter: <seconds>, limit, remaining: 0 }`).
 
 ---
 
