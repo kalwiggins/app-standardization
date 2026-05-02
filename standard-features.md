@@ -1,4 +1,4 @@
-# Epic Design Labs — Standard Features (v3.3)
+# Epic Design Labs — Standard Features (v3.4)
 
 **Canonical reference** for the foundational features every Epic Design Labs app should have. New apps adopt this whole stack so users get a consistent experience — same login, same org model, same affiliate program, same support widget — across the whole portfolio.
 
@@ -21,6 +21,15 @@
 - 📋 **Proposed** — New in v3; not yet implemented anywhere
 
 **Reference implementation:** Foundry IMS (api: `Epic-Design-Labs/app-foundry-ims-api`, admin: `app-foundry-ims-admin`, marketing: `astro-foundryims`). Foundry is the most current implementation; if you find a better pattern, propose a standard update rather than diverging silently.
+
+### Changes in v3.4
+
+Refinement pass on v3.3 — corrects positions where v3.3 over-committed on behalf of leadership, simplifies the partner trial creation flow, and flags a scaling concern.
+
+- **§7 commission cap language softened.** The v3.3 paragraph defending no-cap commissions ended with a specific commitment ("the lever to pull is the percentage 10% → 8% for new partnerships, not capping existing ones") that wasn't a leadership decision — that's a future design call. Now reads: "If commission economics ever need adjusting, the standard will be revisited."
+- **§7 race-to-create reframed as the design, not a problem.** v3.3 added a `409 pending_trial_exists` conflict warning, a `force: true` override, and a consolidated invitation email. Per leadership: multiple partners creating trials for the same prospect is **intentional and supported** — the conversion-to-paid step is the adjudicator. Real-world cases exist where two partners legitimately work on two distinct instances for the same prospect (e.g., separate brands under one customer). The standard now keeps the rate limit (anti-fraud against scraped lists) and abandoned-org cleanup (data hygiene), but drops the conflict warning, the force flag, and the consolidated email. Each invitation stands on its own.
+- **§7 dual-status during white-label clarified.** v3.3 added `PartnerSeat` at trial creation (single source of truth for "which clients does this partner have"). v3.4 makes the resulting redundancy explicit: during white-label, the partner is both `User` (role OWNER) and a `PartnerSeat` row in the same client org. Both serve different queries; both stay if the partner remains owner indefinitely; on promotion to client, the User row drops and PartnerSeat stays. Clean state transition.
+- **§3.6 push-to-Clerk rate-limit flag.** v3.3 added opportunistic write of `role` + `accountType` to Clerk metadata on every `ClerkGuard` request when they don't match. The only-on-mismatch pattern keeps steady-state writes near zero, but post-deploy bursts and bulk role changes could hit Clerk's admin-API rate limits. Added explicit guidance: confirm limits against expected traffic, add a per-user 60s mismatch-write cache, log Clerk write failures at `warn` and continue serving (local DB stays canonical).
 
 ### Changes in v3.3
 
@@ -307,7 +316,12 @@ Some fields exist in both Clerk and the local DB (`accountType`, `role`, org mem
 
 **Sync direction is one-way and write-on-change.** When local `role` or `accountType` changes (admin promotes a user, partner application is approved), we write the new value to Clerk metadata in the same transaction. We do **not** poll or sync from Clerk back to local. Treat Clerk metadata as **eventually consistent / advisory** — the frontend may read it for UI hints (`useUser().publicMetadata`), but the API always re-validates against the local DB. Direct edits to Clerk metadata via the dashboard during incidents will get overwritten on the next local update for that user.
 
-**Plus: push on login.** On every successful authenticated request that hits `ClerkGuard`, after the local DB lookup, opportunistically write the current `role` + `accountType` to Clerk metadata if they don't match. This keeps client-side `useUser().publicMetadata` reads accurate. Without it, a fresh signup or a recently-promoted user would have stale Clerk metadata on the client until the next local-DB-triggered write — and the client SDK would render UI off the wrong values. The write is fire-and-forget (no blocking), and only fires on mismatch (no extra write traffic in the steady state).
+**Plus: push on login.** On every successful authenticated request that hits `ClerkGuard`, after the local DB lookup, opportunistically write the current `role` + `accountType` to Clerk metadata if they don't match. This keeps client-side `useUser().publicMetadata` reads accurate. Without it, a fresh signup or a recently-promoted user would have stale Clerk metadata on the client until the next local-DB-triggered write — and the client SDK would render UI off the wrong values. The write is fire-and-forget (no blocking), and only fires on mismatch (no extra write traffic in the steady state — most requests skip it).
+
+> **Rate-limit caution:** the only-on-mismatch pattern keeps steady-state write traffic to Clerk near zero, but the burst pattern after a deploy that touches role logic, after a bulk role change, or during a re-auth storm could hit Clerk's per-instance write quotas. Each app should:
+> - Confirm Clerk's current admin-API rate limits against the app's expected post-login traffic shape (Clerk publishes these per plan).
+> - Add a per-`(clerkUserId, key)` short-TTL cache (e.g., 60s) on the mismatch-write path so a flurry of requests from a single client doesn't fan out to repeated Clerk writes within the same window.
+> - Log Clerk write failures at `warn` and continue serving the request — the local DB stays canonical, and the next mismatch-check will retry.
 
 If a divergence is detected during permission re-validation, log to Sentry at `warn` and reconcile by reading the local DB and writing to Clerk.
 
@@ -724,6 +738,20 @@ Client → clicks invite link → Clerk signup → joins the pre-created org as 
 
 **Why create the PartnerSeat at trial creation, not just at promotion:** Without it, the dashboard's "list this partner's client orgs" query has to UNION (`Users where role=OWNER and accountType=partner`) with `PartnerSeats` — two sources of truth for the same conceptual relationship. Creating the seat upfront makes `PartnerSeat` the canonical answer; OWNER is just an additional role the partner happens to hold during a white-label arrangement.
 
+**Dual-status during white-label — intentional redundancy:** During a Path A (white-label) trial and indefinitely afterward if the partner stays as owner, the partner has **two** representations in the client org simultaneously:
+
+- A row in the client org's `User` table with `role: OWNER` (so they can act as owner — invite team members, change settings, etc.).
+- A row in `PartnerSeat` linking the client org to the partner's own org (so the partner dashboard can list this client and the audit log can attribute partner-seat actions).
+
+This is mildly redundant but solves more problems than it creates:
+
+- The partner dashboard query is one straight `SELECT FROM PartnerSeat WHERE partnerOrgId = ?` regardless of arrangement (white-label vs. promoted).
+- Permission checks always use the client-org `User` row (the OWNER role grants normal owner permissions).
+- Activity / audit logs can choose which actor to attribute based on context (`createdBy: User.id` for logged-in admin actions; `partnerSeatId` for partner-seat-attributed actions).
+- On promotion to client (Path B), the partner's `User` row is deleted; the `PartnerSeat` row stays. Client becomes OWNER, partner retains seat. Single, clean state transition.
+
+If the partner stays as owner indefinitely (white-label long-term), the redundancy is permanent. That's fine — both rows serve different purposes and queries are unambiguous.
+
 **Audit trail during partner-controlled trial:** All `ActivityLog` entries during this period must be tagged `source: "partner_seat"` to distinguish partner-attributed actions from client-attributed actions. This creates a clear audit trail for any disputes about what was done before the client took ownership.
 
 ### Two ownership paths after conversion
@@ -765,28 +793,21 @@ If a partner refuses to promote a client who wants ownership, the client has an 
 
 This is intentionally a **manual support process** rather than self-service: the human review prevents abuse in either direction (clients claiming ownership of accounts where the partner is genuinely paying, or partners holding accounts hostage).
 
-### Race-to-create (and the prospect-side guards that come with it)
+### Race-to-create is the design, not a problem to solve
 
-The partner side is intentional: multiple partners can create trials for the same prospect email — each gets their own `Referral` row in `pending` status. Whichever partner converts the prospect to paid wins the credit. If both somehow convert (unlikely edge case), both get credit; the work was done in both cases. A cooldown would constrain partners' selling processes for marginal benefit.
+Multiple partners creating trials for the same prospect email is **intentional and supported**. Each partner gets their own `Referral` row in `pending` status against their own pre-created org. Whichever partner converts the prospect to paid wins the credit on that org. If a real-world prospect chooses to bring on two partners with two valid instances (e.g., a Foundry org for IMS work + a separate Foundry org for a different brand they own), both partners legitimately get credit on the orgs they each set up.
 
-But the **prospect side** needs guards or it becomes: invitation spam, abandoned orgs littering the DB, and an email-list-poisoning vector if a malicious "partner" creates trials for thousands of unwitting prospects. The standard requires:
+The conversion-to-paid step is the ultimate adjudicator — credit follows the org that the prospect actually chose to convert. We don't need a coordination layer to prevent partners from creating trials in parallel; the market sorts it out at conversion.
 
-1. **Per-partner rate limit on trial creation** — `10 / hour` per partner-org by default (per §22). Higher tiers configurable. Prevents bulk creation against scraped email lists.
+What we still standardize:
 
-2. **Pending-trial check on creation.** When partner B tries to create a trial for `prospect@example.com` and partner A already has a `pending` Referral for that email (across any org A created), the API responds:
-   ```
-   409 Conflict
-   { "error": "pending_trial_exists",
-     "existingReferralId": "ref_...",
-     "existingPartnerOrgName": "Acme Consulting" }
-   ```
-   Partner B is told another partner is already engaged with this prospect — they can coordinate or wait. Hard reject is not what we want (could block legitimate cases where two partners are working with the same prospect by mutual agreement); soft warning + override flag (`force: true` body param) is the standard.
+1. **Per-partner rate limit on trial creation** — `10 / hour` per partner-org by default (per §22). Higher tiers configurable. Anti-fraud against scraped email lists; not a coordination mechanism between partners. A bad actor creating thousands of trials gets stopped here.
 
-3. **Prospect-side notification** — when a second partner force-creates despite the warning, the prospect receives ONE consolidated email summarizing both invitations: "Two partners are inviting you — pick one." Not two separate "you've been invited to Acme" emails to the same address. This is implementation work in the partner trial creation flow + Resend template.
+2. **Abandoned-org cleanup.** If an invited user never signs in after 14 days, the partner-trial org auto-deletes. Releases the email-as-org-member slot for any future invitation, removes orphaned data. Cron sweeps for `Organization.createdAt > 14 days ago AND only one User row (the partner) AND no client login`.
 
-4. **Abandoned-org cleanup.** If an invited user never signs in after 14 days, the partner-trial org auto-deletes. Releases the email for re-invitation, removes orphaned data. Cron sweeps for `Organization.createdAt > 14 days ago AND only one User row (the partner) AND no client login`.
+3. **Each invitation email stands on its own.** Prospect receiving multiple invitations from multiple partners is acceptable — it accurately reflects what's happening (multiple partners are trying to set them up). The prospect picks the one they want by clicking through; the others get cleaned up after 14 days via the abandoned-org sweep.
 
-These three guards together (rate limit + conflict warning + auto-cleanup) make race-to-create safe without removing the partner-side flexibility.
+We deliberately do **not** add: pending-trial conflict warnings, consolidated invitation emails, or hard rejects. Those would constrain partners' selling processes without serving a real need.
 
 ### Partner Dashboard
 
@@ -810,7 +831,7 @@ These three guards together (rate limit + conflict warning + auto-cleanup) make 
 - Commissions for billing events in month N are paid in month N+1. Example: a client pays their April invoice on April 15. The partner's $X commission accrues to the May commission statement, paid early May.
 - This gives clean monthly reconciliation, time for refunds/chargebacks to settle, and predictable payout timing.
 
-> **On the absence of a cap or sunset:** This is a deliberate choice. A 24/36-month cap would lower lifetime commission cost but adds complexity (cap tracking, sunset notifications, partner disputes near expiry) and weakens the partner's long-term commitment to the client relationship. We accept that a partner who originated a client 5 years ago still earns 10% on that client's bill — this aligns the partner's incentive with the client's long-term success. If commission economics ever genuinely strain margins, the lever to pull is the percentage (10% → 8%) for *new* partnerships, not capping existing ones (which would be a trust-eroding change).
+> **On the absence of a cap or sunset:** This is a deliberate choice. A 24/36-month cap would lower lifetime commission cost but adds complexity (cap tracking, sunset notifications, partner disputes near expiry) and weakens the partner's long-term commitment to the client relationship. We accept that a partner who originated a client 5 years ago still earns 10% on that client's bill — this aligns the partner's incentive with the client's long-term success. If commission economics ever need adjusting, the standard will be revisited.
 
 ### API surface (planned)
 
