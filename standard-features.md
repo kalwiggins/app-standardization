@@ -1,4 +1,4 @@
-# Epic Design Labs — Standard Features (v3.5)
+# Epic Design Labs — Standard Features (v3.6)
 
 **Canonical reference** for the foundational features every Epic Design Labs app should have. New apps adopt this whole stack so users get a consistent experience — same login, same org model, same affiliate program, same support widget — across the whole portfolio.
 
@@ -21,6 +21,16 @@
 - 📋 **Proposed** — New in v3; not yet implemented anywhere
 
 **Reference implementation:** Foundry IMS (api: `Epic-Design-Labs/app-foundry-ims-api`, admin: `app-foundry-ims-admin`, marketing: `astro-foundryims`). Foundry is the most current implementation; if you find a better pattern, propose a standard update rather than diverging silently.
+
+### Changes in v3.6
+
+Codifies the team-artifact + dev-workflow conventions that were already practiced informally:
+
+- **§17.5 Team artifacts** — added a new subsection naming the four artifacts every repo carries: `README.md`, `CHANGELOG.md`, `docs/roadmap.md`, `CLAUDE.md`. Locked in `roadmap.md`'s four-section format (Shipped / In flight / Planned / Parked) with example. Roadmap is product-language, not engineering-task-language.
+- **§17.5 Pull request workflow** — explicit: every change goes through a PR, no direct pushes to `main`. Branch naming (`<author>/<short-description>`), PR title prefixes drive semver (already in CI section), PR body structure (Summary / Changelog / Test plan), squash-merge default, merge gate, branch protection at the GitHub level.
+- **§20 checklist** — added branch protection setup and the four team artifacts to the new-app bootstrap.
+
+Version numbering itself was already covered (§17.5 CI section: PR-title-driven semver, `APP_VERSION` env var, `/health.version`, auto-changelog from PR titles).
 
 ### Changes in v3.5
 
@@ -1909,6 +1919,65 @@ Standardized on **Prisma migrations** across the portfolio:
 - Version surfaced via `/health.version` and `APP_VERSION` env var
 - Changelogs auto-generated from PR titles
 
+### Team artifacts (every app, every repo)
+
+Every app's repo carries the same small set of living docs at `docs/`:
+
+| Artifact | Location | Purpose | Cadence |
+|---|---|---|---|
+| **`README.md`** | repo root | One-page orientation: what this is, how to run it, where the docs are | Updated on first impression breaking changes |
+| **`CHANGELOG.md`** | repo root | User-facing changelog. **Auto-generated** from PR titles + the optional `## Changelog` section in PR bodies (per the CI section above) | On every merge to main |
+| **`docs/roadmap.md`** | per repo | Living team roadmap — what's shipped, in flight, planned, parked. Customer-shareable on request | Updated as PRs merge and as priorities shift |
+| **`CLAUDE.md`** | repo root | Project memory for Claude Code agents (and a useful onboarding aid for humans). Architecture overview, conventions, deployment quirks | When non-obvious behavior or convention is added |
+
+**`docs/roadmap.md` format:**
+
+A four-section table — **Shipped** / **In flight** / **Planned** / **Parked** — with these columns: feature, status, version (if shipped), owner, target date (if planned). The roadmap stays product-language (what the customer experiences), not engineering-task-language (what the dev team does). Engineering breakdown lives in PRs, issues, or planning docs, not here.
+
+```markdown
+# Foundry IMS — Roadmap
+
+## Shipped
+| Feature | Version | Owner |
+|---|---|---|
+| Affiliate links + dashboard | v1.148.0 | Kal |
+| Clerk auth migration | v1.122.0 | Kal |
+
+## In flight
+| Feature | Owner | ETA |
+|---|---|---|
+| Marketing-site signup flow (v3.5 alignment) | Kal | next sprint |
+
+## Planned
+| Feature | Owner | Target |
+|---|---|---|
+| Partner program | Kal | Q3 |
+| Throttle billing integration | TBD | gated on Throttle availability |
+
+## Parked
+| Feature | Reason |
+|---|---|
+| Mobile app | Out of scope; revisit when web demand saturates |
+```
+
+### Pull request workflow
+
+**Every change to every repo goes through a PR.** No direct pushes to `main`. This is the enforcement layer that makes auto-versioning, auto-changelog, and the audit-via-PR-review tenancy lint principle (§21.12) work.
+
+Conventions every app follows:
+
+- **Branch naming**: `<author>/<short-description>` — e.g., `kal/affiliate-api`, `joud/fix-order-sync`. Lowercase, hyphens, no slashes after the author segment.
+- **PR title drives semver**: prefix with `feat:` (minor bump), `fix:` (patch), `breaking:` (major). No prefix → patch by default. (Per the CI section above.)
+- **PR body structure**:
+  - `## Summary` — 1–3 bullets explaining what and why
+  - `## Changelog` — user-facing one-liners that flow into `CHANGELOG.md` (see the CI section above)
+  - `## Test plan` — checklist of what to verify after deploy
+- **Squash-merge by default** so `main` history reads as one-commit-per-PR. Linear, bisect-friendly, matches the auto-version-per-PR cadence.
+- **Merge gate**: CI green + at least one approval. Solo authors on small docs/typo PRs may self-merge with judgment, but anything touching code or schema needs a second set of eyes.
+- **Never skip hooks** (`--no-verify`) or bypass signing without explicit reason in the PR body. If a hook fails, fix the underlying cause.
+
+**Direct pushes to `main` are blocked at the GitHub branch-protection level** in every Epic-Design-Labs repo. Setting up branch protection is part of the new-app bootstrap (§20).
+
 ### API versioning
 
 - Standardized on URL prefix: `/api/v1/`. **All endpoint paths shown elsewhere in this doc** (`/affiliates/me/code`, `/users/invite`, `/orgs/me`, etc.) are implicitly under this prefix — the prefix is omitted in examples for readability.
@@ -2231,6 +2300,8 @@ When bootstrapping the next app, replicate in this order:
 - [ ] **Smooth signup path** — auto-create org on first load per §3.2
 - [ ] **Per-environment isolation** — staging Clerk + Sentry env tag + per-env DB per §17.5
 - [ ] **Standard env var names** match the §17.6 table
+- [ ] **Branch protection on `main`** — direct pushes blocked, PR + CI green required, per §17.5 PR workflow
+- [ ] **Team artifacts in place** — `README.md`, `CHANGELOG.md`, `docs/roadmap.md`, `CLAUDE.md` per §17.5
 
 ### Core features
 - [ ] **Org create / switch / leave / close flows** per §3.8
