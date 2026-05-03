@@ -1,4 +1,4 @@
-# Epic Design Labs — Standard Features (v3.4)
+# Epic Design Labs — Standard Features (v3.5)
 
 **Canonical reference** for the foundational features every Epic Design Labs app should have. New apps adopt this whole stack so users get a consistent experience — same login, same org model, same affiliate program, same support widget — across the whole portfolio.
 
@@ -21,6 +21,21 @@
 - 📋 **Proposed** — New in v3; not yet implemented anywhere
 
 **Reference implementation:** Foundry IMS (api: `Epic-Design-Labs/app-foundry-ims-api`, admin: `app-foundry-ims-admin`, marketing: `astro-foundryims`). Foundry is the most current implementation; if you find a better pattern, propose a standard update rather than diverging silently.
+
+### Changes in v3.5
+
+Architectural shift: **the marketing site is now the front door for signups, not a forwarder.** Previously signup happened on `app.<rootdomain>/signup`; now it happens on `<rootdomain>/signup` with embedded Clerk. The conversion event fires on a `<rootdomain>/welcome` thank-you page where ad-platform pixels can attribute conversions cleanly. The affiliate cookie is scoped cross-subdomain so it follows the visitor across marketing root, landing-page subdomains, the Clerk vanity subdomain, and the admin.
+
+- **§3.2 marketing-site signup** — new section. Embedded Clerk `<SignUp />` on the marketing domain via `@clerk/astro` (or framework equivalent). Marketing site needs `CLERK_PUBLISHABLE_KEY` (public; never the secret). Clerk's `afterSignUpUrl` set to `<rootdomain>/welcome`.
+- **§3.3 smooth org creation** — new section. Org auto-provisioned via `user.created` webhook (primary path); admin first-load auto-create kept as fallback for delayed/failed webhook delivery.
+- **§3.9 Clerk webhooks** — added `user.created` to required handlers. Reads `unsafeMetadata.affiliateCode`, creates the org + Referral with attribution.
+- **§6 affiliate flow rewritten** — cookie scoped to `.<rootdomain>` (cross-subdomain), `?r=` URL param is the entry point but no longer needs to be propagated through link rewriting. Signup happens on the marketing domain. Welcome page fires conversion pixels + CTA to admin.
+- **§18 marketing site contract** — substantial rewrite. Marketing site now hosts `/signup` (embedded Clerk) and `/welcome` (conversion pixel host) in addition to its previous responsibilities. Link-rewriting script removed (no longer needed with cross-subdomain cookies). Cookie capture script updated to use `Domain=.<rootdomain>`.
+- **§18.3 conversion tracking** — new section. Standard pixel placement on `/welcome` (Google Ads, Meta, LinkedIn, TikTok, Reddit), GTM-recommended implementation, consent-gating per §18.4.
+- **§19 domain conventions** — added `accounts.<rootdomain>` (Clerk vanity subdomain) and the `<purpose>.<rootdomain>` pattern for marketing landing pages / microsites.
+- **§20 checklist** — expanded with marketing-site signup, vanity subdomain, conversion-pixel placement, `afterSignUpUrl` configuration.
+
+Re-numbering: §3 subsections shifted (`3.3` → `3.4`, etc.) to make room for the new `3.2` marketing-signup and `3.3` smooth-org-creation. The Clerk webhook section is now `3.9`; org lifecycle endpoints `3.10`. Cross-references updated throughout.
 
 ### Changes in v3.4
 
@@ -182,7 +197,7 @@ The exceptions are **shared libraries** (e.g., `@epic/disposable-emails`, `@epic
 ### Foundry audit checklist (work to align reference impl with v3)
 
 - [ ] Drop `User.clerkUserId @unique` constraint, add `@@index([clerkUserId])` to support multi-org users
-- [ ] Make `User.email`, `User.name`, `User.clerkUserId` nullable for tombstoning per §3.4
+- [ ] Make `User.email`, `User.name`, `User.clerkUserId` nullable for tombstoning per §3.5
 - [ ] Migrate per-user `User.affiliateCode` to per-org `Organization.affiliateCode` (schema + data migration + customer comms if old codes are in circulation)
 - [ ] Verify `Referral.referrerOrgId` references local `Organization.id` (not Clerk ID, not user-keyed)
 - [ ] Migrate `ActivityLog.createdBy` from email to userId (with backfill for departed users — orphan emails map to `null` or a `"deleted_user"` literal)
@@ -192,13 +207,20 @@ The exceptions are **shared libraries** (e.g., `@epic/disposable-emails`, `@epic
 - [ ] Migrate transactional emails to `react-email` (current PO send/follow-up are inline HTML strings) per §9
 - [ ] Adopt `@epic/sentry-config` with PII redaction per §17
 - [ ] Rename `SENTRY_RELEASE` env var to `APP_VERSION` per §17
-- [ ] Implement smooth-signup auto-create-org flow per §3.2 (currently relies on Clerk's hosted org-selection screen)
+- [ ] Implement smooth-signup auto-create-org flow per §3.3 (currently relies on Clerk's hosted org-selection screen)
+- [ ] **Move signup form from `app.foundryims.com/signup` to `foundryims.com/signup`** per §3.2 — embed Clerk `<SignUp />` on the Astro marketing site via `@clerk/astro`
+- [ ] Build `foundryims.com/welcome` thank-you page with Google Ads + Meta + LinkedIn conversion pixels per §18.3
+- [ ] Configure Clerk vanity subdomain `accounts.foundryims.com` per §19
+- [ ] Set Clerk `afterSignUpUrl` to `https://foundryims.com/welcome`
+- [ ] Update marketing-site cookie capture script to use `Domain=.foundryims.com` per §18.2 (currently host-only)
+- [ ] Remove the URL-bridge link rewriting from `astro-foundryims/src/layouts/Layout.astro` (no longer needed with cross-subdomain cookies)
+- [ ] Add `user.created` webhook handler to API per §3.9 (org auto-provision + affiliate attribution) — replaces the post-auth `AffiliateAttribution` callback as the primary attribution path
 - [ ] Migrate from current billing (whatever is in place) to Throttle once Throttle ships per §23
 - [ ] Build backup runbook documenting 30-day expiry + deletion-rerun-on-restore per §15.2
 - [ ] Set up 7-year audit-log cold-storage infrastructure per §14.5
 - [ ] Convert Stackbe → fully-on-Clerk for any features still routing through Stackbe (feature requests was the last remaining one as of v3.1)
 - [ ] PR-review enforcement of tenancy-scoped queries until `@epic/prisma-tenancy-lint` ships per §21.12
-- [ ] **Schema audit deliverable:** produce a diff document comparing Foundry's `prisma/schema.prisma` against the v3.3 baseline schemas in §3.4 (Org/User), §6 (Referral with `referrerOrgId` SetNull + `sharedByUserId`), §7 (PartnerSeat / PartnerSeatAssignment), §11 (Notification with `audience` + `deliveryClass`, NotificationPreference per-method), §12 (Webhook + WebhookDelivery with secret rotation fields), §13 (ApiKey with `expiresAt` + `scopes`), §14 (ActivityLog with `partnerSeatId` + standard `source` values), §14.5 (AuditLog with `partnerSeatId`), §15.2 (DataDeletionRequest, DataDeletionAudit). One doc, one PR, ratified before v3.3 enters audit phase
+- [ ] **Schema audit deliverable:** produce a diff document comparing Foundry's `prisma/schema.prisma` against the v3.5 baseline schemas in §3.5 (Org/User), §6 (Referral with `referrerOrgId` SetNull + `sharedByUserId`), §7 (PartnerSeat / PartnerSeatAssignment), §11 (Notification with `audience` + `deliveryClass`, NotificationPreference per-method), §12 (Webhook + WebhookDelivery with secret rotation fields), §13 (ApiKey with `expiresAt` + `scopes`), §14 (ActivityLog with `partnerSeatId` + standard `source` values), §14.5 (AuditLog with `partnerSeatId`), §15.2 (DataDeletionRequest, DataDeletionAudit). One doc, one PR, ratified before v3.3 enters audit phase
 - [ ] Drop `User.affiliateCode` column once per-org migration completes (separate migration after the data move)
 
 ---
@@ -212,23 +234,37 @@ Required settings in every Clerk project:
 - **Sign-up enabled** — open self-serve signup. (Restrict via Clerk's allowlist if you need invite-only later.)
 - **Magic link, Google, Apple** sign-in methods enabled.
 - **Organizations enabled.**
-- **`force_organization_selection: false`** — let users land in the app immediately after signup; we auto-create an org in code (see §3.2).
+- **`force_organization_selection: false`** — let users land in the app immediately after signup; we auto-create an org in code (see §3.3).
 - **`automatic_organization_creation: false`** — Clerk doesn't auto-create either; we control the flow so we can also write the local Org row + send the right magic link.
 - **Organization name template** — `"{{user.first_name}}'s Organization"` (fallback `"My Organization"`).
 - **2FA / passkeys enabled** at the Clerk level for every app.
 
-### 3.2 Smooth signup path (avoid conversion drag)
+### 3.2 Signup happens on the marketing site, not the admin
 
-Showing prospects a "Create your organization" screen between signup and the dashboard is conversion drag. We avoid it by combining `force_organization_selection: false` (Clerk doesn't gate on org selection) with our own auto-create on first dashboard load.
+The signup form lives on the **marketing site** (e.g., `<rootdomain>/signup`), not the admin app. Reasons:
 
-1. User signs up via Clerk's hosted UI (magic link / Google / Apple).
-2. Clerk session is live with zero memberships.
-3. On first authenticated load of the admin app, **automatically create an org** named `"<First Name>'s Workspace"` via `clerk.organizations.createOrganization` if the user has zero memberships, then `setActive` it.
-4. Land directly on the dashboard.
+- **Conversion-pixel attribution.** Google Ads / Meta / LinkedIn / TikTok pixels live on the marketing domain. Conversion events (sign-up complete) need to fire on the same domain that loaded the pixels — putting signup on the admin domain breaks attribution for paid acquisition.
+- **Front-door framing.** The marketing site is the prospect-facing surface. Signing up should happen there, not require a hop to a different domain (`app.<rootdomain>`) before form submission.
+- **Affiliate cookie continuity.** With the affiliate cookie scoped to `.<rootdomain>` (see §6), the cookie is available to the signup form on `<rootdomain>/signup` directly.
 
-No extra "create your org" screen unless the user already has multiple orgs and is choosing between them. Org rename is available later in Settings.
+The technical pattern is **embedded Clerk** on the marketing site:
 
-### 3.3 Disposable email blocking
+- Marketing site uses `@clerk/astro` (or framework equivalent) and renders `<SignUp />` inline at `<rootdomain>/signup`.
+- The marketing site needs `CLERK_PUBLISHABLE_KEY` (public; never the secret key — that stays server-side on the API).
+- After successful signup, Clerk redirects the user to `<rootdomain>/welcome` (the conversion thank-you page) instead of straight to the dashboard. Configure this via Clerk's `afterSignUpUrl`.
+
+### 3.3 Smooth org creation (no "create your org" screen)
+
+After Clerk creates the user, an org needs to exist for them to use the app. We avoid showing a "Create your organization" screen by combining `force_organization_selection: false` with two automated paths:
+
+- **Primary: `user.created` webhook.** When Clerk creates the user, our API receives the `user.created` webhook (see §3.9), reads any `unsafeMetadata.affiliateCode` set during signup, auto-creates an org named `"<First Name>'s Workspace"`, and writes the `Referral` row if an affiliate code was present. Org exists before the user lands anywhere.
+- **Fallback: admin first-load auto-create.** If the webhook is delayed or fails (Clerk webhook delivery is at-least-once, not strictly real-time), the admin's first-load logic checks for zero memberships and auto-creates the org as a backup. Idempotent — once the webhook lands, this path becomes a no-op.
+
+Either way, by the time the user clicks "Continue to dashboard" from the welcome page, the org exists. No extra screen, no waiting state.
+
+Org rename is available later in Settings.
+
+### 3.4 Disposable email blocking
 
 Every app blocks signups from known disposable email providers using the **`disposable-email-domains`** npm package (actively maintained, ~3.7k domains). When a blocked domain is detected:
 
@@ -236,7 +272,7 @@ Every app blocks signups from known disposable email providers using the **`disp
 - Log the attempt to Sentry at `info` severity (per §17 — the disposable email block is a signal, not an error).
 - **CSR override is per-domain**, not per-email — granting `mailinator.com` access opens it for everyone using that domain. UI lives in an admin-only Settings page (`/admin/disposable-overrides` or equivalent). Each override row carries: `domain`, `addedBy` (User.id), `reason`, `createdAt`, optional `expiresAt`. Override creation/removal writes an `auth.disposable_override` entry to the AuditLog (§14.5). This makes overrides explicit, time-bound by default, and auditable — not informal Slack favors.
 
-### 3.4 Local schema mirror
+### 3.5 Local schema mirror
 
 ```prisma
 model Organization {
@@ -295,7 +331,7 @@ enum UserRole {
 - `User.email`, `User.name`, `User.clerkUserId` are **nullable** to support GDPR tombstoning (§15). PII is nulled on deletion; the row itself survives so foreign keys keep working. **Migration note:** apps that started with `email String` (required) — including Foundry — need an audited `ALTER TABLE` to make these columns nullable. The `@@unique([orgId, email])` constraint continues to work; Postgres allows multiple NULLs in unique constraints by default.
 - The shift from per-user to per-org affiliate codes is locked in for v3. The `User.affiliateCode` field is reserved for migration only — present in the schema only so apps mid-migration can read old values during cutover. **After Foundry's per-user → per-org affiliate migration completes, the `User.affiliateCode` column gets dropped via a follow-up migration** (added to the §2 audit checklist as a separate item from the migration itself, so it doesn't get forgotten). New apps that bootstrap from this standard skip this column entirely — `affiliateCode` lives on `Organization`, never on `User`.
 
-### 3.5 ClerkGuard + permission re-validation
+### 3.6 ClerkGuard + permission re-validation
 
 Every API request goes through a guard that:
 
@@ -307,7 +343,7 @@ Every API request goes through a guard that:
 
 Reference: `app-foundry-ims-api/src/auth/guards/clerk.guard.ts`.
 
-### 3.6 Source of truth on Clerk-mirrored fields
+### 3.7 Source of truth on Clerk-mirrored fields
 
 Some fields exist in both Clerk and the local DB (`accountType`, `role`, org membership). On divergence:
 
@@ -325,7 +361,7 @@ Some fields exist in both Clerk and the local DB (`accountType`, `role`, org mem
 
 If a divergence is detected during permission re-validation, log to Sentry at `warn` and reconcile by reading the local DB and writing to Clerk.
 
-### 3.7 Org switcher (header dropdown)
+### 3.8 Org switcher (header dropdown)
 
 Universal pattern: a dropdown in the top-right header showing the user's Clerk memberships, with switch / create / leave actions.
 
@@ -340,7 +376,7 @@ Behavior contract:
 
 The `X-Clerk-Org-Id` header pattern requires every manual `fetch()` site to use a shared `buildAuthHeaders()` helper instead of constructing headers inline. See `app-foundry-ims-admin/src/lib/api/core.ts`.
 
-### 3.8 Clerk webhook handling
+### 3.9 Clerk webhook handling
 
 Apps consume **Clerk webhooks** to keep local state aligned when Clerk-side changes happen (admin deletes a user from the dashboard, a user updates their email, etc.). Without this, local DB drifts from Clerk and bugs surface as "ghost users" or "stale email."
 
@@ -359,6 +395,7 @@ const evt = wh.verify(rawBody, headers) as ClerkWebhookEvent;  // throws on inva
 
 | Event | What to do |
 |---|---|
+| `user.created` | **Auto-provision the user's first org.** Read `unsafeMetadata.affiliateCode` if present (set by the marketing-site signup form per §6), create an `Organization` named `"<First Name>'s Workspace"`, create the local `User` row with `role: OWNER`, add Clerk org membership, and write a `Referral` row if an affiliate code was passed. This is the primary path for org provisioning; the admin first-load fallback (§3.3) handles delayed/failed webhook delivery. |
 | `user.deleted` | Tombstone the local `User` row(s) for this `clerkUserId` so they can't be recreated on next login attempt. Tombstone in the §15.2 sense — null PII, set `deletedAt`, keep the row for FK integrity. |
 | `organization.deleted` | Cascade-close the local `Organization` row matching `clerkOrgId`. Same flow as `DELETE /orgs/me`. |
 | `user.updated` | Propagate email/name changes to local `User` rows (across all orgs the user belongs to). Critical when the user changes their email in their account-tab UI. |
@@ -369,7 +406,7 @@ const evt = wh.verify(rawBody, headers) as ClerkWebhookEvent;  // throws on inva
 
 **Failure handling:** if the webhook can't process (database down, Clerk API rate limit during cleanup), return 5xx so Clerk retries. Log to Sentry at `error`.
 
-### 3.9 Org lifecycle endpoints
+### 3.10 Org lifecycle endpoints
 
 | Action | Endpoint | Who | Notes |
 |---|---|---|---|
@@ -546,7 +583,7 @@ model Referral {
 - **`referrerOrg` uses `onDelete: SetNull`** — when a referrer org closes, the row survives with `referrerOrgId: null`. Preserves the referred org's history (we still know it was originally an affiliate signup) and keeps commission accounting trails intact for any commissions that already accrued. The status is set to `expired` by the close handler so no new commissions accrue. The `affiliateCode` snapshot field still tells you who originated the relationship even though the org is gone.
 - **`referredOrg` uses `onDelete: Cascade`** — when the referred org closes, delete the Referral row. The org is gone; there's nothing left to track and no future events to attribute.
 
-The §3.9 close-org dialog still surfaces the open-commission warning ("You have $X in open referral commissions; closing forfeits future payouts on N referred orgs") — that's a UX nicety, not a database constraint. The schema permits the close; the dialog informs the user before they confirm.
+The §3.10 close-org dialog still surfaces the open-commission warning ("You have $X in open referral commissions; closing forfeits future payouts on N referred orgs") — that's a UX nicety, not a database constraint. The schema permits the close; the dialog informs the user before they confirm.
 
 **Schema fix from v2:** `Referral.referrerOrgId` is a local `Organization.id`, not a Clerk ID. (v2 had `referrerUserId` referencing a Clerk user ID, which is unstable across instance recreation and breaks GDPR deletion.)
 
@@ -585,21 +622,31 @@ private async generateUniqueCode(): Promise<string> {
 
 ### URL format
 
-`https://<marketing-domain>/?r=ABC12345`
+`https://<rootdomain>/?r=ABC12345`
 
-Cookie: `affiliateR` (30-day TTL, samesite=lax). The `?r=` is short by design.
+Cookie: `affiliateR`, **scoped to the entire root domain** (`Domain=.<rootdomain>;path=/;samesite=lax`, 30-day TTL). Cross-subdomain so the cookie follows the prospect across:
+- `<rootdomain>` (marketing site main pages)
+- `landing.<rootdomain>`, `pricing.<rootdomain>`, etc. (marketing landing pages and microsites)
+- `accounts.<rootdomain>` (Clerk vanity subdomain, where Clerk hosts auth flows)
+- `app.<rootdomain>` (admin)
+- `api.<rootdomain>` (server-side cookie reads if needed)
+
+The `?r=` URL param is the entry point that sets the cookie; once set, the cookie carries the value for 30 days.
 
 ### Flow
 
 1. Existing org member visits Settings → Affiliate, clicks Copy.
-2. They share the URL.
-3. Prospect lands on the marketing site → script reads `?r=`, validates against `/^[A-Za-z0-9]{8}$/` (tightened from earlier `{4,16}` to match generated code length), stores cookie (overwriting any previous), rewrites every `<a href*="app.<domain>">` link to point at `/signup?r=CODE`.
-4. Prospect clicks any "Sign in" / "Get started" CTA → lands at `app.<domain>/signup?r=CODE`.
-5. Admin's `/signup` page captures `r` into `sessionStorage.affiliateR`, renders Clerk's `<SignUp />` (with disposable email check).
-6. Prospect completes signup → Clerk org created.
-7. On first dashboard load, the `AffiliateAttribution` component fires `POST /affiliates/attribute` with `{ orgId, code }`.
-8. API creates the `Referral` row, idempotent on duplicate org. Self-referral check runs against the referrer's own email.
-9. Referrer sees the new sign-up under Settings → Affiliate.
+2. They share the URL `https://<rootdomain>/?r=ABC12345`.
+3. Prospect lands on **any** marketing-site page (root, landing page subdomain, pricing, etc.) → script reads `?r=`, validates against `/^[A-Za-z0-9]{8}$/`, stores cookie scoped to `.<rootdomain>` (overwriting any previous).
+4. Prospect browses, eventually clicks a **"Sign Up Free"** / **"Get Started"** CTA → routes to `<rootdomain>/signup` (on the marketing domain — not the admin).
+5. Marketing-site signup page renders Clerk's `<SignUp />` component (embedded via `@clerk/astro` or framework equivalent). On form submit, the page reads the `affiliateR` cookie and passes it to Clerk as `unsafeMetadata.affiliateCode`. Clerk performs the disposable email check.
+6. Clerk creates the user → fires `user.created` webhook → API handler reads `unsafeMetadata.affiliateCode`, auto-creates an org, creates a `Referral` row attributing the new org to the referrer, with self-referral check (per rule 3 above).
+7. Clerk redirects the user to **`<rootdomain>/welcome`** — the conversion thank-you page on the marketing site (configured via Clerk's `afterSignUpUrl`).
+8. Welcome page fires conversion pixels (Google Ads, Meta Pixel, LinkedIn, etc. — see §18.X), shows a brief celebration, optionally clears the affiliate cookie, and presents a **"Continue to Dashboard"** CTA → `app.<rootdomain>`.
+9. User clicks Continue → lands in admin (Clerk session is already live across subdomains) → org already exists from step 6, immediate dashboard access. (If the webhook in step 6 was delayed, the admin's first-load fallback per §3.3 creates the org instead — admin still loads cleanly.)
+10. Referrer sees the new sign-up under Settings → Affiliate.
+
+The admin's `/signup` route still exists as a **fallback entry point** for visitors who somehow arrive there directly (deep-linked, return visitor, etc.) — but it's no longer the front door.
 
 ### API surface
 
@@ -1479,7 +1526,7 @@ model AuditLog {
 - `partner_seat.added`
 - `partner_seat.removed`
 - `partner.payout_email_changed` — security event (PayPal email controls real money flow)
-- `auth.disposable_override_added` — CSR allowed a disposable email domain (§3.3)
+- `auth.disposable_override_added` — CSR allowed a disposable email domain (§3.4)
 - `auth.disposable_override_removed`
 
 ### App-specific extensions
@@ -1519,7 +1566,7 @@ Returns one CSV per top-level model. Stream-encoded so it doesn't buffer in memo
 
 UI: **Settings → Data Export** card with "Export All Data" button. Auth'd to OWNER.
 
-**Post-close availability:** When an org is closed (§3.8), the final export remains available for **30 days** before final purge. Closure dialog warns the OWNER and offers immediate export before deletion.
+**Post-close availability:** When an org is closed (§3.10), the final export remains available for **30 days** before final purge. Closure dialog warns the OWNER and offers immediate export before deletion.
 
 ### 15.2 User Right to Deletion 🧭
 
@@ -1939,7 +1986,7 @@ One canonical name across every app — prevents future divergence:
 | `DATABASE_URL` | Postgres connection |
 | `CLERK_PUBLISHABLE_KEY` | Clerk public key |
 | `CLERK_SECRET_KEY` | Clerk admin SDK key |
-| `CLERK_WEBHOOK_SECRET` | Clerk webhook signature verification (§3.8) |
+| `CLERK_WEBHOOK_SECRET` | Clerk webhook signature verification (§3.9) |
 | `SENTRY_DSN` | Per-app Sentry project DSN |
 | `RESEND_API_KEY` | Resend transactional email |
 | `RESEND_FROM_ADDRESS` | Default sender, e.g. `Foundry IMS <orders@ims.foundryims.com>` |
@@ -2069,60 +2116,77 @@ This lets apps stub the webhook handler now (verify signature, persist event, no
 
 ## 18. Marketing Site Contract
 
-Every marketing site must:
+The marketing site is the **front door** for new signups, not just a brochure. It hosts the actual signup form (via embedded Clerk), the conversion thank-you page where pixels fire, and the affiliate-link cookie capture.
 
-1. **Capture `?r=` from any landing URL** into a 30-day `affiliateR` cookie (samesite=lax). Validate against tightened regex `^[A-Za-z0-9]{8}$` (matches the actual generated code length, prevents arbitrary code stuffing).
-2. **Last-touch wins on overwrite.** New `?r=` overwrites previous cookie value.
-3. **Rewrite all `<a href*="app.">` links** when the cookie is set:
-   - Reroute root `/` and `/login` paths to `/signup`.
-   - Append `?r=<cookie>` to every admin link (preserve any existing `?r=`).
-4. **Have a "Sign Up Free" or "Get Started" CTA** that points at `app.<domain>/signup` directly (not `/login`).
-5. **`/partners` landing page** 🧭 — explains the partner program.
-6. **`/partners/apply` form** 🧭 — submits to API.
-7. **Cookie consent banner** — every marketing site that targets EU traffic implements a consent banner. **Standard library: `@epic/cookie-consent`** (shared dev dependency, see §1) — handles the banner UI, consent storage, and exposes a `hasConsent('functional' | 'analytics' | 'marketing')` API the rest of the site code reads before setting any cookies.
+### 18.1 Required pages and routes
 
-The affiliate `?r=` cookie is **categorized as "functional"** (Recital 30 / strictly-necessary exemption) — set without explicit opt-in, surfaced in the banner's "what we use" disclosure. Analytics and marketing cookies require explicit opt-in. **Legal sign-off on the functional categorization is still pending** for affiliate-specific use; until cleared, apps targeting EU traffic should re-categorize the affiliate cookie as "marketing" and require opt-in to be safe.
+Every marketing site must have:
 
-Apps not targeting EU traffic may skip the banner entirely; document that decision per app.
+1. **Home + content pages** — the usual marketing surface. Any of these can receive an affiliate `?r=` URL.
+2. **`/signup`** — embedded Clerk `<SignUp />` component (per §3.2). Signup happens here, on the marketing domain.
+3. **`/welcome`** — thank-you page, conversion pixel host (per §18.3). Users land here after Clerk completes signup.
+4. **CTAs throughout the site** that route to `/signup` (NOT to `app.<rootdomain>`).
+5. **`/partners`** 🧭 — explains the partner program.
+6. **`/partners/apply`** 🧭 — submits to API.
 
-Reference: `astro-foundryims/src/layouts/Layout.astro`. Cookie capture and link rewriting:
+### 18.2 Affiliate cookie capture (cross-subdomain)
+
+Every page on the marketing site captures `?r=` into a cookie scoped to the entire root domain. Two changes from earlier versions of this doc:
+
+- **Cookie domain is `.<rootdomain>`**, not the host. This makes the cookie available on `<rootdomain>`, every subdomain (`landing.<rootdomain>`, `accounts.<rootdomain>`, `app.<rootdomain>`, `api.<rootdomain>`, etc.).
+- **Link rewriting is no longer needed.** Because the cookie is cross-subdomain, the admin can read it directly when the user eventually lands there. No URL-param bridging required. (The `?r=` URL param is still the *capture* mechanism on first landing, but it doesn't need to be propagated through links.)
 
 ```js
 (function () {
   var COOKIE = 'affiliateR';
   var MAX_AGE = 30 * 24 * 60 * 60;
-  var VALID = /^[A-Za-z0-9]{8}$/;  // tightened to exact code length
+  var VALID = /^[A-Za-z0-9]{8}$/;  // exact generated code length
+  var ROOT = location.hostname.replace(/^[^.]+\./, '');  // strip leftmost subdomain — adjust per site if hosted at apex
 
-  // 1. Capture ?r= into cookie (last-touch overwrites)
   var ref = new URLSearchParams(location.search).get('r');
   if (ref && VALID.test(ref)) {
+    // Domain=.<rootdomain> makes the cookie cross-subdomain
     document.cookie = COOKIE + '=' + encodeURIComponent(ref) +
-      ';max-age=' + MAX_AGE + ';path=/;samesite=lax';
+      ';domain=.' + ROOT +
+      ';max-age=' + MAX_AGE +
+      ';path=/;samesite=lax';
   }
-
-  // 2. Rewrite admin links to /signup?r=<code>
-  function getCookie(n) {
-    var m = ('; ' + document.cookie).split('; ' + n + '=')[1];
-    return m ? decodeURIComponent(m.split(';')[0]) : null;
-  }
-  function rewrite() {
-    var c = getCookie(COOKIE);
-    if (!c || !VALID.test(c)) return;
-    document.querySelectorAll('a[href*="app."]').forEach(function (a) {
-      try {
-        var u = new URL(a.href);
-        if (u.searchParams.has('r')) return;
-        if (u.pathname === '/' || u.pathname === '/login') u.pathname = '/signup';
-        u.searchParams.set('r', c);
-        a.href = u.toString();
-      } catch (_) {}
-    });
-  }
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', rewrite);
-  } else { rewrite(); }
 })();
 ```
+
+The signup page reads this cookie when the user submits the Clerk `<SignUp />` form and passes the value as `unsafeMetadata.affiliateCode`. The webhook handler (§3.9 `user.created`) reads it and writes the `Referral` row.
+
+### 18.3 Conversion tracking on the welcome page
+
+The marketing site is responsible for firing **conversion pixels** when a signup completes. Pixels live on `<rootdomain>` (NOT on the admin domain — pixel attribution is host-bound; pixels loaded on the marketing site can't see events on the admin).
+
+`/welcome` is the conversion page. It loads the standard set of pixels and fires the conversion event on page-mount. Standard pixels every app loads (subject to consent — §18.4):
+
+| Pixel | Standard event | Purpose |
+|---|---|---|
+| Google Ads / GA4 | `sign_up` | Conversion attribution for Google Ads campaigns + GA4 funnel tracking |
+| Meta Pixel | `CompleteRegistration` | Facebook / Instagram ads |
+| LinkedIn Insight Tag | `Lead` (or custom conversion) | LinkedIn ads |
+| TikTok Pixel | `CompleteRegistration` | TikTok ads |
+| Reddit Pixel | `SignUp` | Reddit ads |
+
+Apps may skip pixels they don't need; the standard is "if you run paid ads on platform X, fire the conversion event on the welcome page." Recommended implementation: load pixels via Google Tag Manager (GTM) on every marketing-site page; fire the conversion event via `dataLayer.push({ event: 'sign_up', ... })` from `/welcome` only.
+
+The welcome page also:
+- Optionally clears the `affiliateR` cookie (it's been used for attribution; no further purpose).
+- Shows a brief celebration / orientation (e.g., "Your workspace is ready").
+- Presents a **"Continue to Dashboard"** primary CTA → `app.<rootdomain>`. Clerk session is already live (cross-subdomain), so the user lands directly in the dashboard.
+
+### 18.4 Cookie consent
+
+Every marketing site that targets EU traffic implements a consent banner. **Standard library: `@epic/cookie-consent`** (shared dev dependency, see §1) — handles the banner UI, consent storage, and exposes a `hasConsent('functional' | 'analytics' | 'marketing')` API.
+
+- **Functional cookies** (the affiliate `?r=` cookie, Clerk session cookies): set without explicit opt-in. Disclosed in the banner's "what we use" panel.
+- **Analytics + marketing cookies** (GA4, Meta Pixel, LinkedIn, TikTok, Reddit, etc.): require explicit opt-in. Pixels must check `hasConsent('marketing')` before firing the conversion event.
+
+**Legal sign-off on the affiliate cookie's "functional" categorization is still pending.** Until cleared, apps targeting EU traffic should re-categorize the affiliate cookie as "marketing" and require opt-in. Apps not targeting EU traffic may skip the banner entirely; document that decision per app.
+
+Reference: `astro-foundryims/src/layouts/Layout.astro` for the cookie capture script.
 
 ---
 
@@ -2132,12 +2196,16 @@ Every app uses its own root domain. The structure within that domain is consiste
 
 | Subdomain | Purpose | Example (Foundry IMS) |
 |---|---|---|
-| `<rootdomain>` | Marketing site | `foundryims.com` |
+| `<rootdomain>` | Marketing site (front door — hosts signup + welcome per §18) | `foundryims.com` |
 | `app.<rootdomain>` | Admin / product app | `app.foundryims.com` |
 | `api.<rootdomain>` | API endpoint | `api.foundryims.com` |
+| `accounts.<rootdomain>` | Clerk vanity subdomain (CNAME to Clerk for auth UI elements like email-verification links) — required by Clerk for some flows even when signup is embedded on the marketing site | `accounts.foundryims.com` |
+| `<purpose>.<rootdomain>` | Optional marketing landing pages / microsites (paid-acquisition, product-launch sites, etc.). Receives the cross-subdomain `affiliateR` cookie automatically. | `launch.foundryims.com`, `pricing.foundryims.com` |
 | `<app>.<rootdomain>` | Email sender subdomain | `ims.foundryims.com` |
 
 **Each app gets its own root domain.** Not subdomains under `epic.dev`.
+
+**Cross-subdomain cookie scope.** The `affiliateR` cookie (§6, §18.2) is set with `Domain=.<rootdomain>` so it follows the prospect across `<rootdomain>`, any landing-page subdomain, `accounts.<rootdomain>` (Clerk), `app.<rootdomain>` (admin), and is readable server-side from `api.<rootdomain>` requests. Clerk session cookies follow the same pattern (Clerk handles this when you configure the vanity subdomain).
 
 ---
 
@@ -2148,11 +2216,16 @@ When bootstrapping the next app, replicate in this order:
 ### Foundation
 - [ ] **Root domain registered** + DNS configured per §19
 - [ ] **Clerk projects: prod + staging** with the §3.1 dashboard config (`force_organization_selection: false`)
-- [ ] **Clerk webhooks** wired with `CLERK_WEBHOOK_SECRET` per §3.8 (`user.deleted`, `organization.deleted`, `user.updated`, `session.created`, membership events)
+- [ ] **Clerk vanity subdomain** (`accounts.<rootdomain>`) configured per §19
+- [ ] **Marketing site has Clerk publishable key** (NOT the secret key) for embedded `<SignUp />` per §3.2
+- [ ] **Marketing-site `/signup` page** with embedded Clerk `<SignUp />` + cookie-to-`unsafeMetadata` wiring per §3.2 / §6
+- [ ] **Marketing-site `/welcome` page** with conversion pixels + "Continue to Dashboard" CTA per §18.3
+- [ ] **Clerk `afterSignUpUrl`** set to `<rootdomain>/welcome`
+- [ ] **Clerk webhooks** wired with `CLERK_WEBHOOK_SECRET` per §3.9 (`user.created` for org auto-provision, plus `user.deleted`, `organization.deleted`, `user.updated`, `session.created`, membership events)
 - [ ] **Sentry project** + `instrument.ts` + `@epic/sentry-config` per §17 — `APP_VERSION` env var
 - [ ] **Resend workspace** + sender domain + 2-week email warmup window planned per §9 / §17.6
 - [ ] **Better Uptime monitor** (or equivalent) for `/health` per §17.6
-- [ ] **`Organization` + `User` models** per §3.4 (include `accountType`, `affiliateCode` on Organization, `deletedAt` on User, NO `@unique` on `clerkUserId`, nullable `email` / `name` / `clerkUserId` for tombstones)
+- [ ] **`Organization` + `User` models** per §3.5 (include `accountType`, `affiliateCode` on Organization, `deletedAt` on User, NO `@unique` on `clerkUserId`, nullable `email` / `name` / `clerkUserId` for tombstones)
 - [ ] **`ClerkGuard`** with permission re-validation + opportunistic Clerk metadata sync per §3.5 / §3.6 / §16
 - [ ] **Disposable email blocking** at signup per §3.3
 - [ ] **Smooth signup path** — auto-create org on first load per §3.2
@@ -2165,8 +2238,10 @@ When bootstrapping the next app, replicate in this order:
 - [ ] **Users & roles** per §4 (UserRole enum, shared baseline permissions, `RequirePermission` decorator, Settings → Users)
 - [ ] **`Referral` model + `Organization.affiliateCode`** per §6 — note: per-org, not per-user
 - [ ] **Affiliate endpoints** per §6
-- [ ] **`/signup?r=` route + `AffiliateAttribution` + Settings → Affiliate** per §6
-- [ ] **Marketing site script** per §18
+- [ ] **Settings → Affiliate** subpage with copy-link UI per §6
+- [ ] **Cross-subdomain affiliate cookie** (`Domain=.<rootdomain>`) script on marketing site per §18.2
+- [ ] **Conversion pixels on `/welcome`** (Google Ads, Meta, LinkedIn, etc. as applicable) per §18.3
+- [ ] **Admin `/signup` route remains** as a fallback entry point but is not the primary CTA target
 
 ### Communication
 - [ ] **`EmailService` wrapper** with Resend + `react-email` per §9
