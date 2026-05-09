@@ -1904,10 +1904,44 @@ Standardized on **Prisma migrations** across the portfolio:
 
 ### CI / auto-versioning
 
-- Semantic versioning from git tags
-- PR-title-driven semver (e.g., `feat:`, `fix:`, `breaking:`) auto-bumps version
-- Version surfaced via `/health.version` and `APP_VERSION` env var
-- Changelogs auto-generated from PR titles
+**Build-time mechanics:**
+
+- Semantic versioning from git tags.
+- PR-title-driven semver: prefixes `feat:` / `feature:` → minor bump, `fix:` / `bugfix:` → patch, `breaking:` / `BREAKING CHANGE` → major. Anything else defaults to a patch.
+- A merge-to-main GitHub Actions workflow (`auto-version.yml` per the reference impl) reads the PR title, bumps `package.json`, rewrites a hardcoded `APP_VERSION` constant in the health controller, commits, and tags. The hardcoded constant exists because `package.json` imports don't work reliably in some bundling targets (e.g. Lambda).
+- The tag push triggers the deploy workflow (`cd.yml`).
+
+**Version surfacing in-app:**
+
+- `GET /health` returns `{ version, ... }` — see the Health checks subsection above.
+- The admin frontend fetches `/health` on mount and renders the live version as a small clickable label (e.g. `v1.173.0`) at the bottom of the sidebar. The label links to `/changelog`.
+- Reference impl: `src/components/layout/sidebar.tsx`'s `useEffect` calls `${NEXT_PUBLIC_API_URL}/health`, sets a state variable, and renders `<Link href="/changelog">v{version}</Link>` near the bottom of the navigation.
+
+**Customer-facing changelog page:**
+
+Every app exposes a `/changelog` route in admin that's readable without any feature gate (it's customer-friendly notes, intentionally public to logged-in users).
+
+- Frontend fetches `${API_BASE}/health/changelog` and parses the response's `content` field as Markdown with a known structure: `## v{version} ({YYYY-MM-DD})` entries containing `### Features` / `### Fixes` / `### Breaking` subsections with bullet items.
+- Render is a vertical timeline with category badges. The reference impl strips `(@username)` and `(#PR)` noise from bullets at parse time so the customer-facing text is clean.
+- API side: `GET /health/changelog` reads `CHANGELOG.md` from the repo root with `readFileSync` and returns its contents as `{ content: '...' }`. Public endpoint, no auth required (the file is intentionally written for customer eyes).
+
+**How CHANGELOG.md gets populated:**
+
+The auto-version workflow updates `CHANGELOG.md` on every release. Order of preference for the bullet text:
+
+1. **Preferred:** PR body has a `## Changelog` section with bullets. The workflow extracts those bullets verbatim. This is the path the reference impl encourages — see `## Changelog` mention in repo CLAUDE.md.
+2. **Fallback:** `## Summary` section bullets.
+3. **Last resort:** the PR title.
+
+The workflow has a denylist of non-user-facing PR title patterns (e.g. internal docs, chore commits). Matching PRs skip the changelog write entirely so customers don't see a release note that means nothing to them.
+
+**Practical guidance for contributors:**
+
+- Plain language, no code references, no internal jargon. The reader is a customer, not a developer.
+- ✅ "Order page filters now persist when you navigate away and come back."
+- ✗ "Swap useState to usePersistedState backed by localStorage for filter state."
+- One bullet per discrete user-visible change. A multi-feature PR can have multiple bullets in the same `## Changelog` block.
+- A purely internal PR (refactor, test, build tweak) should have no `## Changelog` section AND a title prefix the denylist catches — that way the version still bumps but the customer page isn't cluttered.
 
 ### API versioning
 
