@@ -1,4 +1,4 @@
-# Epic Design Labs — Standard Features (v3.5)
+# Epic Design Labs — Standard Features (v3.6)
 
 **Canonical reference** for the foundational features every Epic Design Labs app should have. New apps adopt this whole stack so users get a consistent experience — same login, same org model, same affiliate program, same support widget — across the whole portfolio.
 
@@ -8,7 +8,7 @@
 >
 > If your current implementation diverges from these standards, **discuss with leadership before making changes.** Some divergences may be intentional or load-bearing. Others may represent opportunities to align. Major rework should never happen without conversation first.
 >
-> **Platform direction:** All Epic apps are migrating to a standardized auth and payments stack. **Clerk** handles identity (users and organizations). **Throttle** handles transactions and billing. Apps currently on Stackbe are in active migration. This standardization assumes Clerk + Throttle as the baseline architecture going forward.
+> **Platform direction:** All Epic apps are migrating to a standardized auth and payments stack. **Clerk** handles identity (users and organizations). **Throttle** handles transactions and billing (⏸️ still unbuilt — see §23, including the v3.6 naming flag: the shipped THROTTLE *sales-channel* platform is a different thing). Remaining Stackbe apps are in active migration; Foundry completed its Stackbe removal 2026-05-23. This standardization assumes Clerk + Throttle as the baseline architecture going forward.
 >
 > Visual design is intentionally *not* standardized — each app earns its own look and feel. What we standardize is **feature parity**: every app has the same login, org model, affiliate program, support, notifications, etc.
 
@@ -21,6 +21,43 @@
 - 📋 **Proposed** — New in v3; not yet implemented anywhere
 
 **Reference implementation:** Foundry IMS (api: `Epic-Design-Labs/app-foundry-ims-api`, admin: `app-foundry-ims-admin`, marketing: `astro-foundryims`). Foundry is the most current implementation; if you find a better pattern, propose a standard update rather than diverging silently.
+
+**Document structure (v3.6):** sections are grouped into thematic parts; **§ numbers are stable identifiers and are no longer strictly sequential** (relocated sections keep their numbers so cross-references — including code comments citing them — stay valid).
+
+- **Part I — Foundations:** §1 Overview · §2 Status Table + Foundry audit checklist
+- **Part II — Auth & Identity:** §3 Auth & Organizations · §4 Users & Roles · §5 Account Types · §16 Session Permission Re-Validation
+- **Part III — Affiliate Program:** §6
+- **Part IV — Referrals & Partner Program:** §7
+- **Part V — Billing (Throttle):** §8 Trials + subscription lifecycle · §23 Throttle Integration
+- **Part VI — Communication & Support:** §9 Email · §10 Support · §11 Notifications
+- **Part VII — Platform Infrastructure:** §12 Outbound Webhooks · §13 API Keys · §14 Activity Log · §14.5 Audit Log · §15 Export & Deletion · §17 Sentry · §17.5 Operational Patterns · §22 Rate Limiting
+- **Part VIII — Web Presence & Marketing:** §18 Marketing Site Contract · §19 Domain Conventions
+- **Part IX — Adoption & Governance:** §20 New-App Checklist + Required Screens · §21 Principles
+
+### Changes in v3.6
+
+Two things at once: a **reality refresh** against the shipped Foundry repos (2026-08, api v3.54.x), and a set of **new stipulations** tightening the auth/affiliate/referral/billing baseline so these common functionalities are consistent and testable across apps.
+
+**New stipulations:**
+
+- **§7 partner economics — the per-client election (headline change):** a partner either keeps paying a client's bill white-label at a **20% discount netted at source** (raised from v3.1's 10%; Throttle invoices at 80% of list), or spins ownership off to the client and earns the **10% recurring commission**. One client, one model, never both. §6/§7/§21 and the §23 reserved integration points updated to match.
+- **§6 affiliate-by-default:** every org has an affiliate code and every user in every role can copy a working share link from day one — the program is never opt-in, gated, or applied-for.
+- **§4 multi-user orgs:** every org is explicitly multi-user/multi-role; no app may assume one-user-per-org.
+- **§7 partner applications:** any agency can apply — two entry points (marketing `/partners/apply` and in-app Settings → Partner Program), one reviewed application; partners refer by physically creating the trial (unchanged, restated).
+- **§8 subscription lifecycle table:** Throttle must support start-trial, convert, upgrade, downgrade, cancel, reactivate, and the white-label ⇄ client-paid model switch — each with an API path and a UI surface.
+- **§20 required-screens inventory:** the canonical 21-screen list for auth/affiliate/partner/billing, as the QA walk-through target.
+- **§18.3 conversion pages are `noindex`.**
+
+**Reality refresh:**
+
+- The §2 status table and Foundry audit checklist are synced to what actually ships; per-section **Foundry status** callouts record where the reference implementation diverges, so divergences are visible decisions instead of silent drift. Where reality contradicts a prescription, the prescription is left intact and flagged — amending it stays a leadership call per the preamble.
+- **Document reorganized into Parts I–IX** (see above); §16, §22, and §23 moved into their thematic parts, keeping their numbers.
+- **Now ✅ (were 🧭/📋):** partner program §5/§7 (full API surface, partner dashboard, trial creation, seats on both sides, applications with approve/reject, abandoned-trial cleanup cron — commissions still ⏸️ billing), outbound webhooks §12, security audit log §14.5, right to deletion §15.2, and the entire v3.5 marketing-site front door (§3.2/§18: embedded signup, `/welcome` pixels, cross-subdomain cookie, vanity subdomain, link rewriting removed).
+- **Statuses corrected:** disposable-email blocking 🧭→🚧 (enforced on invite/org-create/partner paths; warn-only in the Clerk `user.created` webhook), rate limiting 📋→🚧 (custom in-memory limiter — §22 callout), cron conventions 📋→🚧 (26 jobs live; no cross-instance locking).
+- **Divergence callouts added** (each needs a decision — amend the standard or file the gap as work): §3.3/§3.9 org auto-provisioning unimplemented on both ends; §3.6 per-request Clerk-metadata push not implemented and contraindicated by a Foundry perf incident; §3.9 webhook handler returns 200 on processing errors rather than 5xx; §4 MEMBER aliased to full ADMIN permissions and VIEWER granted `support.write`; §11 notification schema is org-scoped with no per-user rows, audience, or transactional tier; §12 delivery contract uses `x-foundry-*` headers with no dead-letter state and no dual-signing on customer endpoints; §14 ActivityLog deliberately denormalizes `userEmail` (tension with principle 11); §17 no PII redaction shipped; §17.5 health-check shape differs and DB failure doesn't 503; §18.4 no cookie consent shipped.
+- **§23 flag:** "Throttle" now names two things — the still-unbuilt billing platform this doc assumes, and the shipped THROTTLE sales-channel platform Foundry integrates with (Foundry serves catalog; Throttle owns checkout/orders). Needs a naming/priority decision next revision.
+- Checklist items completed since v3.3 are checked off with completion notes; items done differently than specified are annotated rather than silently reworded.
+- Known doc gaps for a future revision (Foundry shipped these with no standard): MCP server + first-party OAuth, app marketplace, accounting integrations (QuickBooks live, Xero planned), headless storefront API (storefront-scoped keys + per-channel webhooks), public API docs, n8n / hosted-SFTP integrations.
 
 ### Changes in v3.5
 
@@ -127,6 +164,8 @@ Tightening pass on v3 — no architectural reversals, several gaps closed:
 
 ---
 
+# Part I — Foundations
+
 ## 1. Overview
 
 Every Epic Design Labs app provides:
@@ -135,12 +174,12 @@ Every Epic Design Labs app provides:
 2. **Multi-tenant organizations** — every customer is one Clerk Organization mirrored locally for data isolation.
 3. **Throttle for payments and billing** — once Throttle integration is finalized, all apps adopt it.
 4. **Universal affiliate links** — any user with `affiliate.read` can copy their org's `?r=CODE` link and the org earns credit on signups.
-5. **Partner program** 🧭 — designated partners get a dashboard, can create client trials directly, earn 10% recurring via partner seats. White-label (partner stays owner) and transfer-to-client paths both supported.
+5. **Partner program** ✅ (commissions ⏸️) — designated partners get a dashboard, can create client trials directly, earn 10% recurring via partner seats. White-label (partner stays owner) and transfer-to-client paths both supported.
 6. **In-app support** — Dispatch Tickets wired into a Help section, scoped per-org.
-7. **Transactional email via Resend** — `react-email` templates compiled at build time.
-8. **Outbound webhooks** 🧭 — push events to customer endpoints with HMAC signing, retries, DLQ, usage metrics.
+7. **Transactional email via Resend** — `react-email` templates compiled at build time (🚧 Foundry still on inline HTML — see §9).
+8. **Outbound webhooks** ✅ — push events to customer endpoints with HMAC signing and retries (DLQ + usage metrics 🚧 — see §12 Foundry status).
 9. **Notifications, activity log, security audit log, API keys, data export, RBAC** — table-stakes infrastructure shared across apps.
-10. **Right-to-deletion compliance** 🧭 — GDPR/CCPA-compliant user data deletion via tombstone model.
+10. **Right-to-deletion compliance** ✅ — GDPR/CCPA-compliant user data deletion via tombstone model.
 11. **Sentry observability** with shared logging conventions and PII redaction (`@epic/sentry-config`).
 12. **Rate limiting with usage metrics** — every public surface rate-limited; usage visible to users before they hit caps.
 
@@ -162,68 +201,75 @@ The exceptions are **shared libraries** (e.g., `@epic/disposable-emails`, `@epic
 
 | Capability | Status | Notes |
 |---|---|---|
-| Clerk auth (magic link + Google + Apple) | ✅ | Stackbe being phased out portfolio-wide. |
+| Clerk auth (magic link + Google + Apple) | ✅ | Foundry fully off Stackbe (2026-05-23); remaining Stackbe apps still migrating. |
 | Org create / switch / leave / close | ✅ | All Clerk-native. Owner sole-leave guard enforced. |
-| Org switcher UI | ✅ | Header dropdown with switch / create / leave actions. |
-| Affiliate code generation + dashboard | ✅ | One code per org. `Organization.affiliateCode` (8-char), Settings → Affiliate page, stats + signups table. |
-| Affiliate signup attribution | ✅ | `/signup?r=CODE` flow + post-auth callback. Idempotent on the API side. Last-touch wins on cookie overwrite. |
-| Marketing site → admin signup forwarding | ✅ | `?r=` cookie + link rewriting for `app.<domain>` links. |
-| Disposable email blocking at signup | 🧭 | Not yet implemented; standardized on `disposable-email-domains` npm package. |
-| Partner role / `accountType` | ✅ schema · 🧭 logic | `User.accountType` column live with default `"client"`. No partner UI yet. |
-| Partner dashboard + partner seats | 🧭 | Planned: Referrals tab, "Create Trial" button, partner seat assignment. White-label and transfer-to-client paths. |
-| Partner-created trials (direct referral) | 🧭 | `Referral.referralType = "direct"` reserved. |
-| Trial period / `trialEndsAt` | ⏸️ | Blocked on Throttle billing doc. |
-| Conversion detection (`Referral.convertedAt`) | ⏸️ | Blocked on Throttle billing doc. |
-| Reward calculation + payout | ⏸️ | 10% recurring, no cap. Commissions paid month N+1. Blocked on Throttle billing doc. |
+| Org switcher UI | ✅ | Foundry's lives in the sidebar (visual freedom); switch / create / leave actions per §3.8. Create-org currently round-trips through sign-out for a token refresh. |
+| Affiliate code generation + dashboard | ✅ | One code per org. `Organization.affiliateCode` (8-char), Settings → Affiliate page, stats + signups table. `User.affiliateCode` dropped. |
+| Affiliate signup attribution | ✅ | `?r=` cookie → `unsafeMetadata.affiliateCode` → attribution on `organizationMembership.created` webhook (code cleared from Clerk after use); admin post-auth callback kept as fallback. Idempotent; last-touch wins. |
+| Marketing-site signup front door (§3.2/§18) | ✅ | `foundryims.com/signup` embedded Clerk + `/welcome` conversion page + cross-subdomain cookie live; link rewriting removed; `accounts.` vanity subdomain CNAME'd. |
+| Disposable email blocking at signup | 🚧 | `disposable-email-domains` wired in; rejects on invite, org-create, and partner-trial paths. Warn-only in the Clerk `user.created` webhook until auto-provisioning lands (§3.3). |
+| Partner role / `accountType` | ✅ | `User.accountType` live; toggled on application approval; pushed to Clerk `publicMetadata` on change (not per-request — see §3.6). |
+| Partner dashboard + partner seats | ✅ | Referrals + Active seats tabs, "Create trial for client" dialog, Settings → Partners (client side) with per-seat tier control. Commissions/team-assignment endpoints still ⏸️ billing. |
+| Partner-created trials (direct referral) | ✅ | `POST /partner/trials` + `referralType: "direct"` + daily abandoned-trial cleanup cron. |
+| Trial period / `trialEndsAt` | ⏸️ | Blocked on Throttle billing doc. Foundry has only an `isPartnerTrial` boolean today — the reserved fields (§3.5, §23) were never added. |
+| Conversion detection (`Referral.convertedAt`) | ⏸️ | Column exists; no writer. Blocked on Throttle billing doc. |
+| Reward calculation + payout | ⏸️ | 10% recurring commission on the promoted-client path; 20% white-label discount netted at source (v3.6 — see §7). Paid month N+1. Blocked on Throttle billing doc. |
 | Support (Dispatch Tickets) | ✅ | Tickets scoped per-org via tag, third-party API wrapped server-side. |
 | Transactional email (Resend) | 🚧 | Foundry uses Resend with inline HTML for PO send/follow-up. v3 standardizes `react-email`. Migration required. |
-| Notification center (in-app bell + dropdown) | ✅ | Bell icon, unread badge, dropdown. |
-| Notification preferences (per-method) | 🚧 | Foundry has per-category prefs but not per-method (in-app/email/toast). Schema extension required across all apps. |
-| Notification transactional tier | 📋 | New in v3: `deliveryClass: "user_pref" \| "transactional"`. Transactional bypasses preferences (for deletion confirms, security alerts, payment failures). |
-| Outbound webhooks | 🧭 | No app has built customer-facing outbound webhooks yet. Standardized below with HMAC, retries, DLQ, usage metrics. |
-| Activity log | ✅ | Per-org change history with entity-type/id pivot. |
-| Security audit log | 📋 | New in v3: separate `AuditLog` for security-sensitive events (login, role change, key creation, deletion). |
-| API keys | ✅ | `<prefix>_*` prefixed keys, role-scoped, hashed in DB. |
+| Notification center (in-app bell + dropdown) | ✅ | Bell icon (unread dot, no count), dropdown of recent 20. No full-history page yet. |
+| Notification preferences (per-method) | 🚧 | Foundry has per-category on/off only, and its `Notification` rows are org-scoped with no `userId` — the §11 baseline needs a schema migration, not an extension. |
+| Notification transactional tier | 📋 | `deliveryClass: "user_pref" \| "transactional"`. Not implemented anywhere. |
+| Outbound webhooks | ✅ | Shipped in Foundry: `WebhookEndpoint`/`WebhookDelivery`, management API + rotate + replay, every-minute worker, 8-attempt backoff, auto-disable. Contract deltas in §12 Foundry status (headers, no DLQ state, no usage metrics). |
+| Activity log | ✅ | Per-org change history with entity-type/id pivot. Actor = `userId`/`userEmail`/`actorType` via AsyncLocalStorage — see §14 Foundry status. |
+| Security audit log | ✅ | `AuditLog` model + `/audit` page live in Foundry; `auth.login`/`auth.logout` written from Clerk session webhooks. Remaining baseline events instrumented incrementally. |
+| API keys | ✅ | `<prefix>_*` prefixed keys, role- or scope-gated, hashed in DB. Foundry adds `keyType` (ADMIN \| STOREFRONT) + channel binding; `expiresAt` supported by API but not exposed in the create UI. |
 | Data export | ✅ | `GET /orgs/me/export` returns a ZIP of CSVs. |
-| Right to deletion (GDPR/CCPA) | 🧭 | Tombstone model + 30-day backup retention + HMAC email hash. |
-| Users & roles (RBAC) | ✅ | Invite via Clerk, local role assignment, permission decorators. Shared baseline permission set defined below. |
-| Session permission re-validation | 🚧 | Foundry reads role fresh on every request, but does not emit `permission_changed` 401 on demotion. |
-| Sentry observability | 🚧 | Foundry has Sentry init + global filter. v3 adds shared `@epic/sentry-config` with PII redaction. |
-| Rate limiting | 📋 | Per-IP signup, per-API-key, per-org webhooks, error tracking. Usage metrics exposed. |
-| Health checks | 🚧 | Foundry has `/health`. Standardized format below. |
-| Cron conventions | 📋 | Standardized job naming, error logging to Sentry, timezone handling. |
+| Right to deletion (GDPR/CCPA) | ✅ | Shipped in Foundry: 30-day grace + 24h immediate path, Clerk-delete-first tombstone, HMAC email audit. Shape differs from spec (state on `User`; no `DataDeletionRequest` model) — see §15.2 Foundry status. |
+| Users & roles (RBAC) | ✅ | Invite via Clerk, local role assignment, permission decorators. All 13 baseline permissions exist. Foundry's role→permission mapping diverges — see §4 Foundry status. |
+| Session permission re-validation | 🚧 | Foundry re-reads role behind a 30s single-flight cache; still no `permission_changed` 401 on demotion. |
+| Sentry observability | 🚧 | Foundry has Sentry init + global filter. No `beforeSend`/PII redaction shipped; `@epic/sentry-config` does not exist yet; release var still `SENTRY_RELEASE`. |
+| Rate limiting | 🚧 | Foundry runs a custom in-memory fixed-window limiter (per ECS task): 300/min per ADMIN API key + per-endpoint storefront limits, with `X-RateLimit-*`/`Retry-After` headers. No Redis, no per-IP signup limit, no usage endpoints — see §22 Foundry status. |
+| Health checks | 🚧 | Foundry has `/health` but not the standardized shape: no `checks` object, DB failure returns 200 "degraded" rather than 503 — see §17.5 Foundry status. |
+| Cron conventions | 🚧 | 26 jobs live via `@nestjs/schedule`; no advisory locks / Redis SETNX anywhere — single-task-safe only. See §17.5 Foundry status. |
 | Custom fields | ✅ | Per-entity custom field defs + values. |
 
 ### Foundry audit checklist (work to align reference impl with v3)
 
-- [ ] Drop `User.clerkUserId @unique` constraint, add `@@index([clerkUserId])` to support multi-org users
-- [ ] Make `User.email`, `User.name`, `User.clerkUserId` nullable for tombstoning per §3.5
-- [ ] Migrate per-user `User.affiliateCode` to per-org `Organization.affiliateCode` (schema + data migration + customer comms if old codes are in circulation)
-- [ ] Verify `Referral.referrerOrgId` references local `Organization.id` (not Clerk ID, not user-keyed)
-- [ ] Migrate `ActivityLog.createdBy` from email to userId (with backfill for departed users — orphan emails map to `null` or a `"deleted_user"` literal)
-- [ ] Add `support.read/write`, `affiliate.read`, `apikeys.manage`, `activity.read`, `audit.read`, `export.run`, `notifications.manage`, `webhooks.manage` as named permissions per §4 baseline
+Statuses synced to the shipped repos 2026-08-23 (api v3.54.x).
+
+- [x] Drop `User.clerkUserId @unique` constraint, add `@@index([clerkUserId])` to support multi-org users *(done — nullable + indexed, `20260503143134_user_tombstone_fields`)*
+- [x] Make `User.email`, `User.name`, `User.clerkUserId` nullable for tombstoning per §3.5 *(done, same migration)*
+- [x] Migrate per-user `User.affiliateCode` to per-org `Organization.affiliateCode` *(done — `20260503143806_affiliate_per_org`)*
+- [x] Verify `Referral.referrerOrgId` references local `Organization.id` *(done — SetNull relation + `affiliateCode` snapshot + `sharedByUserId`)*
+- [x] Migrate `ActivityLog.createdBy` from email to userId *(done differently: actor is `userId` + `userEmail` + `actorType` enum stamped via AsyncLocalStorage; pre-existing rows read `UNKNOWN`; `userEmail` deliberately denormalized — see §14 Foundry status for the principle-11 tension)*
+- [x] Add `support.read/write`, `affiliate.read`, `apikeys.manage`, `activity.read`, `audit.read`, `export.run`, `notifications.manage`, `webhooks.manage` as named permissions per §4 baseline *(all present in `src/auth/permissions.ts`; `notifications.manage` not yet checked by any admin surface)*
 - [ ] Add `permission_changed` 401 emission on session role mismatch per §16
-- [ ] Add per-method notification preferences (bell/toast/email per category) + `deliveryClass` field per §11
+- [ ] Add per-method notification preferences (bell/toast/email per category) + `deliveryClass` field per §11 — note this now requires migrating `Notification` to per-user rows first (§11 Foundry status)
 - [ ] Migrate transactional emails to `react-email` (current PO send/follow-up are inline HTML strings) per §9
-- [ ] Adopt `@epic/sentry-config` with PII redaction per §17
-- [ ] Rename `SENTRY_RELEASE` env var to `APP_VERSION` per §17
-- [ ] Implement smooth-signup auto-create-org flow per §3.3 (currently relies on Clerk's hosted org-selection screen)
-- [ ] **Move signup form from `app.foundryims.com/signup` to `foundryims.com/signup`** per §3.2 — embed Clerk `<SignUp />` on the Astro marketing site via `@clerk/astro`
-- [ ] Build `foundryims.com/welcome` thank-you page with Google Ads + Meta + LinkedIn conversion pixels per §18.3
-- [ ] Configure Clerk vanity subdomain `accounts.foundryims.com` per §19
-- [ ] Set Clerk `afterSignUpUrl` to `https://foundryims.com/welcome`
-- [ ] Update marketing-site cookie capture script to use `Domain=.foundryims.com` per §18.2 (currently host-only)
-- [ ] Remove the URL-bridge link rewriting from `astro-foundryims/src/layouts/Layout.astro` (no longer needed with cross-subdomain cookies)
-- [ ] Add `user.created` webhook handler to API per §3.9 (org auto-provision + affiliate attribution) — replaces the post-auth `AffiliateAttribution` callback as the primary attribution path
+- [ ] Adopt `@epic/sentry-config` with PII redaction per §17 *(library itself not yet created)*
+- [ ] Rename `SENTRY_RELEASE` env var to `APP_VERSION` per §17 *(`APP_VERSION` currently exists only as a hand-maintained constant in `health.controller.ts`)*
+- [ ] Implement smooth-signup auto-create-org flow per §3.3 *(the `user.created` handler exists but is log-only — "auto-provisioning deferred"; admin has no zero-membership fallback either. First: confirm in the Clerk dashboard whether automatic org creation is covering this today, per the §3.3 open question)*
+- [x] **Move signup form from `app.foundryims.com/signup` to `foundryims.com/signup`** per §3.2 *(done — `@clerk/astro` embedded `<SignUp />` with cookie→`unsafeMetadata` wiring; admin `/signup` retained as fallback)*
+- [x] Build `foundryims.com/welcome` thank-you page per §18.3 *(done — GTM/GA4 + Meta + LinkedIn wired, env-gated; TikTok/Reddit not wired; page is currently indexable — see §18.3 note)*
+- [x] Configure Clerk vanity subdomain `accounts.foundryims.com` per §19 *(done — CNAME live)*
+- [x] Set Clerk post-signup redirect to `https://foundryims.com/welcome` *(done via `forceRedirectUrl="/welcome/"` on the embedded component)*
+- [x] Update marketing-site cookie capture script to use `Domain=.foundryims.com` per §18.2 *(done)*
+- [x] Remove the URL-bridge link rewriting from `astro-foundryims/src/layouts/Layout.astro` *(done)*
+- [ ] Add `user.created` org auto-provisioning per §3.9 *(the handler + svix verification exist and cover 12 event types; affiliate attribution moved to `organizationMembership.created` and works — but org auto-provision from `user.created` is still a stub)*
 - [ ] Migrate from current billing (whatever is in place) to Throttle once Throttle ships per §23
 - [ ] Build backup runbook documenting 30-day expiry + deletion-rerun-on-restore per §15.2
 - [ ] Set up 7-year audit-log cold-storage infrastructure per §14.5
-- [ ] Convert Stackbe → fully-on-Clerk for any features still routing through Stackbe (feature requests was the last remaining one as of v3.1)
-- [ ] PR-review enforcement of tenancy-scoped queries until `@epic/prisma-tenancy-lint` ships per §21.12
-- [ ] **Schema audit deliverable:** produce a diff document comparing Foundry's `prisma/schema.prisma` against the v3.5 baseline schemas in §3.5 (Org/User), §6 (Referral with `referrerOrgId` SetNull + `sharedByUserId`), §7 (PartnerSeat / PartnerSeatAssignment), §11 (Notification with `audience` + `deliveryClass`, NotificationPreference per-method), §12 (Webhook + WebhookDelivery with secret rotation fields), §13 (ApiKey with `expiresAt` + `scopes`), §14 (ActivityLog with `partnerSeatId` + standard `source` values), §14.5 (AuditLog with `partnerSeatId`), §15.2 (DataDeletionRequest, DataDeletionAudit). One doc, one PR, ratified before v3.3 enters audit phase
-- [ ] Drop `User.affiliateCode` column once per-org migration completes (separate migration after the data move)
+- [x] Convert Stackbe → fully-on-Clerk *(done 2026-05-23; Stackbe fully removed)*
+- [ ] PR-review enforcement of tenancy-scoped queries until `@epic/prisma-tenancy-lint` ships per §21.12 *(ongoing; 2026-07 tenancy audit fixed all Critical findings — Important/Minor and the raw-SQL slice remain)*
+- [ ] **Schema audit deliverable:** produce a diff document comparing Foundry's `prisma/schema.prisma` against the baseline schemas in §3.5 (Org/User), §6 (Referral), §7 (PartnerSeat / PartnerSeatAssignment), §11 (Notification with `audience` + `deliveryClass`, NotificationPreference per-method), §12 (Webhook + WebhookDelivery with secret rotation fields), §13 (ApiKey with `expiresAt` + `scopes`), §14 (ActivityLog with `partnerSeatId` + standard `source` values), §14.5 (AuditLog with `partnerSeatId`), §15.2 (DataDeletionRequest, DataDeletionAudit). One doc, one PR, ratified *(the 2026-08-23 drift report is a working input, not the ratified deliverable)*
+- [x] Drop `User.affiliateCode` column once per-org migration completes *(done — same migration as the per-org move)*
+- [ ] **New (v3.6):** reserve the billing schema per §23 — `Organization.trialEndsAt`, `Organization.status`, `Organization.throttleCustomerId`, `BillingEvent` table *(none exist today; trial state is a lone `isPartnerTrial` boolean)*
+- [ ] **New (v3.6):** decide + implement cookie consent per §18.4 *(nothing shipped; Ahrefs analytics currently loads unconditionally)*
+- [ ] **New (v3.6):** verify account deletion scrubs `ActivityLog.userEmail` (and any other denormalized email snapshots) per §14/§15.2
 
 ---
+
+# Part II — Auth & Identity
 
 ## 3. Auth & Organizations
 
@@ -263,6 +309,8 @@ After Clerk creates the user, an org needs to exist for them to use the app. We 
 Either way, by the time the user clicks "Continue to dashboard" from the welcome page, the org exists. No extra screen, no waiting state.
 
 Org rename is available later in Settings.
+
+> **Foundry status (v3.6):** neither path is implemented. The `user.created` handler is log-only ("auto-provisioning deferred"), and the admin's first-load logic bails at zero memberships (it only auto-*activates* when exactly one membership exists). Local org rows are created from `organization.created` / `organizationMembership.created` webhooks. **Open question:** confirm in the Clerk dashboard what creates the Clerk org for an organic marketing-site signup today — either Clerk-side automatic org creation is ON (contradicting §3.1's `automatic_organization_creation: false`) or fresh signups land org-less. Verify with a real test signup before building the webhook path.
 
 ### 3.4 Disposable email blocking
 
@@ -361,6 +409,8 @@ Some fields exist in both Clerk and the local DB (`accountType`, `role`, org mem
 
 If a divergence is detected during permission re-validation, log to Sentry at `warn` and reconcile by reading the local DB and writing to Clerk.
 
+> **Foundry status (v3.6): the per-request push is not implemented — and Foundry's production history argues against it.** Per-request writes in the guard (the `lastLoginAt` update) serialized on a single row lock under a page load's ~20 concurrent requests and caused 5–15-second page loads; the fix throttles guard writes to 5-minute staleness behind a 30-second single-flight auth cache. Clerk metadata is written only on explicit `accountType`/role changes (write-on-change per this section's first half, which Foundry does follow). **Recommendation for the next revision:** drop the "push on login" paragraph and standardize the write-on-change-only pattern; the client can tolerate briefly stale `publicMetadata` because the API never trusts it anyway.
+
 ### 3.8 Org switcher (header dropdown)
 
 Universal pattern: a dropdown in the top-right header showing the user's Clerk memberships, with switch / create / leave actions.
@@ -406,6 +456,8 @@ const evt = wh.verify(rawBody, headers) as ClerkWebhookEvent;  // throws on inva
 
 **Failure handling:** if the webhook can't process (database down, Clerk API rate limit during cleanup), return 5xx so Clerk retries. Log to Sentry at `error`.
 
+> **Foundry status (v3.6):** the handler exists with svix verification and covers 12 event types (including `organization.created`/`.updated`, `organizationMembership.updated`, and `session.removed`/`.revoked` beyond this table). Deltas from the table: `user.created` does **not** auto-provision (log-only stub — §3.3); affiliate attribution runs on `organizationMembership.created` instead, and clears the consumed code from Clerk `unsafeMetadata` (a nice touch worth standardizing); `session.created` writes a plain `auth.login` audit event (no new-device detection yet); and processing errors are **swallowed and 200'd** to prevent Clerk retry storms — the direct opposite of the failure-handling rule above. That last one needs a decision: idempotent handlers + 5xx-retry per the standard, or amend the standard to accept ack-and-log with Sentry as the safety net.
+
 ### 3.10 Org lifecycle endpoints
 
 | Action | Endpoint | Who | Notes |
@@ -421,6 +473,8 @@ const evt = wh.verify(rawBody, headers) as ClerkWebhookEvent;  // throws on inva
 ---
 
 ## 4. Users & Roles (RBAC)
+
+**Stipulated (v3.6): every org is multi-user and multi-role.** An organization is never modeled as a single account — it holds any number of users, each with exactly one role from the shared enum below, invitable and removable at any time. Solo users are simply orgs of one. No app may assume one-user-per-org anywhere (queries, billing seats, UI copy).
 
 Every app needs invite, role assignment, and permission gating.
 
@@ -469,6 +523,8 @@ Default role-to-permission mapping (apps may extend, must not contract):
 
 > **Note on VIEWER + `affiliate.read`:** Every org has a single affiliate code (§6). VIEWER can see their org's code and commission stats but cannot manage settings. This makes the affiliate program viewable to all org members regardless of role.
 
+> **Foundry status (v3.6):** all 13 baseline permissions exist and the guard fails closed (a route with no `@RequirePermission` throws unless explicitly `@NoPermission()` — worth adopting portfolio-wide). Divergences: **MEMBER is aliased to the full ADMIN permission set** ("backward compat"), contradicting the mapping above; `BASELINE_FOR_ALL` grants every role — including VIEWER — `support.write`; the enum has 11 roles (legitimate app-specific extension); and `notifications.manage` is defined but never checked by any admin surface. The MEMBER≡ADMIN aliasing undermines "roles mean the same thing across the portfolio" and needs either a deliberate re-mapping in Foundry or a standard change.
+
 ### Permission gating
 
 Decorator-based on the controller side:
@@ -501,11 +557,44 @@ Every Clerk user has `accountType` in `publicMetadata` (mirrored to `User.accoun
 | Type | Who | What they see |
 |------|-----|---------------|
 | `client` | End users running the app for their business | Standard app UI. Can share their org's affiliate link. |
-| `partner` 🧭 | Agencies, consultants, resellers | Adds Partner sidebar section: Referrals tab, "Create Trial for Client" button, partner profile, payout settings, partner seat assignments. |
+| `partner` ✅ | Agencies, consultants, resellers | Adds Partner sidebar section: Referrals tab, "Create Trial for Client" button, partner profile, payout settings, partner seat assignments. |
 
 Both types log in identically. Partner is a role, not a separate auth system.
 
 ---
+
+## 16. Session Permission Re-Validation 🚧
+
+**Every authenticated request re-validates the user's role and org membership against the local DB.** Sessions do NOT cache permissions until token expiry.
+
+### Why
+
+If an Admin is demoted to Viewer, the change must take effect quickly — not after their session expires. Silent stale permissions are a security and UX problem.
+
+### Implementation
+
+In `ClerkGuard` (or equivalent), after validating the Clerk JWT:
+
+1. Look up the local `User` row by `clerkUserId` + active `orgId`.
+2. Verify the user is still a member of the active org.
+3. Check `User.role` for the current value (don't trust JWT claims for role).
+4. If the user's role has changed or they've been removed: invalidate the session (return 401 with code `permission_changed`) and the frontend forces re-auth.
+
+### Cache TTL
+
+A 5–30 second cache TTL is acceptable for most apps and reduces DB load. Security-sensitive flows (admin actions, billing changes, partner seat permission changes) should bypass cache for sub-second invalidation. Document the TTL choice per app — 30s of stale Admin-vs-Viewer permissions is acceptable as a default; some apps may want tighter.
+
+### Frontend handling
+
+When the API returns a 401 with code `permission_changed`:
+- Clear local auth state
+- Redirect to `/login` with a flash message: "Your permissions have changed. Please sign in again."
+
+> **Foundry status (v3.6):** role is re-read from the local DB behind a **30-second single-flight cache** (top of the allowed 5–30s band; the cache was added as part of the guard-performance fix — see §3.6). Still no `permission_changed` 401 anywhere in api or admin — demotion currently surfaces as a plain 403 from the permission guard. Audit item remains open.
+
+---
+
+# Part III — Affiliate Program
 
 ## 6. Affiliate Program ✅
 
@@ -545,7 +634,7 @@ The shift from per-user to per-org affiliate codes is locked in. It's the right 
 
 These rules apply to every app:
 
-1. **One affiliate code per organization.** Any user with `affiliate.read` (which all roles have) can see their org's code, share it, and view commission stats. Multiple users in the same org share one code; commissions accrue to the org, not to individual users. (See trade-offs above.)
+1. **One affiliate code per organization — and every user has one by default.** The affiliate program is not opt-in, gated, or applied-for: every org gets a code (lazy-generated on first view), and every user in every role holds `affiliate.read`, so **every signed-in user of every Epic app can open Settings → Affiliate and copy a working share link from day one.** Multiple users in the same org share one code; commissions accrue to the org, not to individual users. (See trade-offs above.)
 
 2. **Last-touch attribution wins.** If a prospect clicks two different affiliate links in the 30-day cookie window, the most recent code overwrites the earlier one. This is a deliberate trade-off: simpler than first-touch, aligned with industry standard, but unfair to top-of-funnel educators who may lose credit to bottom-of-funnel coupon sites. Pricing the affiliate tier at 10% with no cap is intended to keep both kinds of partners engaged.
 
@@ -667,9 +756,13 @@ POST /affiliates/attribute            → { attributed, reason?, referralId? }
 
 UI vocabulary: "your link", "sign-ups via your link", "Affiliate" page name. **Never** "referral" — reserved for §7.
 
+> **Foundry status (v3.6):** implemented to spec — per-org code, lazy 8-char generation, snapshot-on-regenerate, any-active-member self-referral check, SetNull/Cascade FK asymmetry, all four endpoints, Settings → Affiliate page with clean vocabulary. One flow delta: attribution fires from the `organizationMembership.created` webhook (not `user.created` — see §3.9), with the admin's sessionStorage + `AffiliateAttribution` post-auth callback as fallback.
+
 ---
 
-## 7. Partner Program 🧭
+# Part IV — Referrals & Partner Program
+
+## 7. Partner Program ✅ (commission payout ⏸️ billing)
 
 The partner program is a fundamentally different model from affiliates. **Partners earn commission by *creating* the trial directly.** This eliminates attribution disputes that plague most B2B SaaS partner programs.
 
@@ -679,11 +772,13 @@ If you want partner-tier credit, **you must be the one that physically sets up t
 
 A user who promotes the product via affiliate link still gets affiliate credit. Partner status unlocks the partner dashboard, the partner seat (continued access to client orgs), and the trial-creation flow.
 
-**Both affiliate and partner referrals earn 10% recurring commission.** The differentiator is the *kind* of relationship — affiliates are link-sharers; partners are integrators with ongoing client relationships.
+**Both affiliate and partner referrals earn 10% recurring commission** on the promoted-client path. The differentiator is the *kind* of relationship — affiliates are link-sharers; partners are integrators with ongoing client relationships. **Partners additionally get an election per client** (v3.6): keep paying the client's bill white-label at a **20% discount netted at source**, or spin ownership off to the client and earn the **10% recurring commission** — see "Two ownership paths" below.
 
 ### Becoming a partner
 
-1. User clicks "Become a Partner" or visits `/partners/apply` (marketing site).
+**Stipulated: any agency, consultant, or reseller can apply to become a partner** — partnership is applied-for and reviewed, never invite-only or ad-hoc. Two entry points, same application:
+
+1. User clicks "Become a Partner" on the marketing site (`/partners` → `/partners/apply`) **or applies in-app** (Settings → Partner Program; any signed-in user).
 2. Submits application: company name, website, expected volume, etc.
 3. Admin reviews via internal tool, approves or rejects.
 4. On approval: Clerk metadata + local User row updated to `accountType: "partner"`. Partner UI surfaces in admin sidebar.
@@ -733,7 +828,7 @@ model PartnerSeatAssignment {
 
 - **One client can have multiple partner seats.** A client might have an agency, a consultant, and a reseller all simultaneously.
 - **Partners can be removed by either side.** The client can revoke the seat. The partner can step away.
-- **Partner referral credit is independent of partner seat status.** If Agency A referred Client X but the client later replaces them with Agency B, Agency A *still* receives the referral commission. This is intentional — the original partner did the originating work. The 10% rate (rather than 20%) plus the "action is proof" requirement (you must physically create the trial) makes this self-balancing: bad actors can't easily farm signups because each one requires real client engagement to convert.
+- **Partner referral credit is independent of partner seat status.** If Agency A referred Client X but the client later replaces them with Agency B, Agency A *still* receives the referral commission. This is intentional — the original partner did the originating work. The deliberately modest 10% commission rate plus the "action is proof" requirement (you must physically create the trial) makes this self-balancing: bad actors can't easily farm signups because each one requires real client engagement to convert.
 - **Partner orgs decide which of their team members access which client seats** via `PartnerSeatAssignment`. The partner org's Partner Dashboard manages this.
 
 ### Permissions on partner seats
@@ -801,22 +896,28 @@ If the partner stays as owner indefinitely (white-label long-term), the redundan
 
 **Audit trail during partner-controlled trial:** All `ActivityLog` entries during this period must be tagged `source: "partner_seat"` to distinguish partner-attributed actions from client-attributed actions. This creates a clear audit trail for any disputes about what was done before the client took ownership.
 
-### Two ownership paths after conversion
+### Two ownership paths after conversion — the partner's election
 
-When a partner-created trial converts to paid, there are **two valid ownership models**:
+When a partner-created trial converts to paid, the **partner elects one of two models per client**. This election is the core partner economic stipulation (v3.6):
 
-#### Path A: White-label (partner stays owner)
+- **Path A — white-label:** the partner keeps ownership and pays the client's bill at a **20% discount netted at source**.
+- **Path B — spin-off:** the partner transfers ownership to the client, the client pays full list, and the partner earns a **10% recurring commission**.
+
+The election is per-client, and switching from A to B is always available (promotion flow below). The economics are deliberately asymmetric: white-label carries the partner's own billing risk and support burden, so it earns the deeper margin.
+
+#### Path A: White-label (partner stays owner, 20% discount)
 
 The partner pays the subscription fee on the client's behalf as part of an all-inclusive service offering. The partner remains OWNER of the org indefinitely.
 
 - Partner stays as `OWNER` of the client org.
 - Partner's payment method is on file in Throttle.
-- **Partner receives a 10% white-label discount on the bill** — netted at source, not paid out as commission. Throttle invoices the partner at 90% of list price for white-label-mode subscriptions.
+- **Partner receives a 20% white-label discount on the bill** — netted at source, not paid out as commission. Throttle invoices the partner at 80% of list price for white-label-mode subscriptions. *(v3.6: raised from the 10% set in v3.1 to make the white-label margin meaningfully better than the commission path.)*
+- No 10% commission accrues on a white-label org — the discount **is** the partner economics for that client. One client, one of the two models, never both.
 - The client may not have visibility into the bill (this is a partner choice).
 
 > **Legal status:** Whether this is a "discount" (treated as net revenue) or a "commission" (gross revenue minus a 1099 expense) for accounting and tax purposes is **pending legal review**. The economics match either way; the line items on financial statements and 1099 forms differ. Path A specifics may evolve once Throttle integration ships and finance/legal sign off. Implementations should treat the discount-at-source mechanism as the default direction but expect refinement.
 
-#### Path B: Promote client to owner
+#### Path B: Promote client to owner (spin-off, 10% commission)
 
 The partner promotes the client user to OWNER. Partner becomes a `PartnerSeat` and continues to earn commission.
 
@@ -874,13 +975,16 @@ We deliberately do **not** add: pending-trial conflict warnings, consolidated in
 
 ### Reward tier and commission timing
 
-- **10% recurring commission, no cap, no time limit** for both `affiliate` and `direct` referrals.
+- **10% recurring commission, no cap, no time limit** for both `affiliate` and `direct` referrals on client-paid (Path B / affiliate) orgs.
+- **20% discount netted at source** for white-label (Path A) orgs — applied on the partner's invoice, never paid out; no commission accrues on those orgs.
 - Commissions for billing events in month N are paid in month N+1. Example: a client pays their April invoice on April 15. The partner's $X commission accrues to the May commission statement, paid early May.
 - This gives clean monthly reconciliation, time for refunds/chargebacks to settle, and predictable payout timing.
 
 > **On the absence of a cap or sunset:** This is a deliberate choice. A 24/36-month cap would lower lifetime commission cost but adds complexity (cap tracking, sunset notifications, partner disputes near expiry) and weakens the partner's long-term commitment to the client relationship. We accept that a partner who originated a client 5 years ago still earns 10% on that client's bill — this aligns the partner's incentive with the client's long-term success. If commission economics ever need adjusting, the standard will be revisited.
 
-### API surface (planned)
+### API surface
+
+> **Foundry status (v3.6):** live today — `GET /partner/me/capabilities` (in place of `profile`), `GET /partner/me/referrals`, `GET /partner/me/seats`, `POST /partner/seats/:id/leave`, `POST /partner/trials`, the applications set (`POST /partner/applications` public, `/from-trial`, `/mine`, list, `:id/approve`, `:id/reject`), `POST /partner/clients/link-existing`, and the client-side `/orgs/me/partner-seats` GET/PATCH/DELETE. Still unbuilt (⏸️ billing): profile/payout, commissions, and team-assignment endpoints. The marketing site's `/partners/apply` currently has no form — it routes into signup + the in-app application.
 
 ```
 GET    /partner/me/profile                  → partner profile + payout settings
@@ -904,6 +1008,8 @@ POST   /support/ownership-claim             → client requests ownership transf
 
 ---
 
+# Part V — Billing (Throttle)
+
 ## 8. Trials ⏸️
 
 ### Public signup ✅ (mechanic exists, no time-bound trial)
@@ -916,9 +1022,25 @@ Today: anyone hitting `/signup` creates a Clerk user + org instantly. Org has no
 - A scheduled job flips `status` to `expired` past the deadline.
 - Affiliate `Referral.status` transitions `active` → `expired` when trial expires without converting.
 
-### Partner-created trial 🧭
+### Required subscription lifecycle operations (v3.6)
 
-Same lifecycle, but `Referral.referralType = "direct"`. Partner sees the trial countdown in their Referrals tab.
+**Stipulated: every app, through Throttle, must support the full subscription lifecycle** — these are the operations the billing integration exists to provide, and every one needs both an API path and a UI surface (§20 screens list):
+
+| Operation | Who initiates | Notes |
+|---|---|---|
+| **Start trial** | Signup (self-serve) or partner (`POST /partner/trials`) | Sets `trialEndsAt`; org `status: "trial"`. |
+| **Convert trial → paid** | Client (or partner on white-label) adds payment method + picks plan | Fires `Referral` conversion (§7); org `status: "active"`. |
+| **Upgrade plan** | OWNER (or white-label partner) | Prorated per Throttle rules; effective immediately. |
+| **Downgrade plan** | OWNER (or white-label partner) | Takes effect at next renewal; feature gates adjust then. |
+| **Cancel** | OWNER (or white-label partner) | Runs to end of paid period, then org `status: "suspended"`; data retained per §15 retention rules. |
+| **Reactivate** | OWNER | From suspended back to active without data loss. |
+| **Switch billing model** | Partner (white-label ⇄ client-paid) | The §7 election: promote-to-client moves the org from partner-paid (20% discount) to client-paid (10% commission). |
+
+Payment-failure dunning rides on `billing.payment_failed` (§11, transactional) rather than being a lifecycle state of its own.
+
+### Partner-created trial ✅ (mechanic live; time-bound lifecycle ⏸️)
+
+Same lifecycle, but `Referral.referralType = "direct"`. Partner sees the trial countdown in their Referrals tab. *(Foundry status: `POST /partner/trials` + abandoned-trial cleanup are live; the countdown itself is ⏸️ until `trialEndsAt` exists.)*
 
 ### Conversion detection ⏸️
 
@@ -931,6 +1053,78 @@ When Throttle reports a paid subscription:
 > **Detailed billing standardization is a separate document — see §23 stub.** This section reserves the integration points.
 
 ---
+
+## 23. Billing & Throttle Integration ⏸️ (stub)
+
+> **Status as of v3.2:** Throttle is Epic's intended billing platform — **not yet built or live**. Phase: **design**. ETA: **TBD, gated on its own design doc**. Until §23 is upgraded out of stub status, **do not depend on Throttle for any blocking design decision in any app**. Sections marked ⏸️ in §2 are blocked on this doc landing.
+
+> **Naming flag (v3.6):** "Throttle" now names two different things. The billing platform this section describes remains unbuilt. Separately, a shipped THROTTLE **sales-channel platform** exists and Foundry integrates with it as a channel (Foundry serves catalog; Throttle owns checkout/orders — `ChannelPlatform.THROTTLE` in the Foundry schema). These must not be conflated: nothing in Foundry's channel integration is billing, and nothing in this section is implemented. Next revision should either rename one or explicitly define both roles.
+
+### What Throttle is (and isn't)
+
+Throttle will be Epic's billing platform — a Stripe-style layer that issues invoices, processes subscriptions, and emits billing events. **It is not a system of record for users or organizations** — Clerk is, and stays so. Throttle's customer records are a downstream subscription view of the same orgs that already exist in Clerk + the local DB.
+
+### Customer-to-org mapping (canonical)
+
+To avoid the three-source-of-truth problem (Clerk users, Throttle customers, local DB), the mapping is locked in upfront:
+
+- **One Throttle customer per Clerk Organization.** The local `Organization` row carries a `throttleCustomerId String? @unique` field reserving the link.
+- **Throttle has no concept of users.** Subscription state belongs to the org. Individual users don't have separate billing profiles. (If multi-user billing visibility is needed, that's a Throttle Dashboard role concern, not a Clerk-level identity concern.)
+- **Direction of trust:** the local DB is canonical for org existence; Throttle is canonical for subscription state. When an org is created, we provision a Throttle customer in the same transaction. When an org is closed, we cancel the Throttle customer.
+- **No customer record exists for users who aren't in any org.** Rules out a "personal billing profile separate from work account" model. Aligns with B2B SaaS norms.
+
+This locks in **two** sources of truth (Clerk identity + Throttle billing) instead of three, with one-way provisioning from Org → Throttle.
+
+### Reserved schema
+
+Add to `Organization` ahead of Throttle integration so activation is a code change, not a migration:
+
+```prisma
+model Organization {
+  // ... existing fields
+  throttleCustomerId  String?  @unique  // populated when Throttle integration ships
+}
+
+model BillingEvent {
+  // see §17.5 Throttle webhook stub — already reserved
+}
+```
+
+### Reserved integration points
+
+This doc reserves integration points for:
+
+- Trial creation, expiration, and reminder emails (§8)
+- Trial-to-paid conversion detection and `Referral.convertedAt` updates (§7, §8)
+- **The full subscription lifecycle** — start trial, convert, upgrade, downgrade, cancel, reactivate, and the partner white-label ⇄ client-paid billing-model switch (§8 lifecycle table)
+- Partner commission calculation — 10% recurring on client-paid orgs, monthly accrual, paid month N+1 (§7)
+- **White-label partner invoicing at 80% of list** — the 20% discount netted at source for Path A orgs (§7)
+- Payout processing (PayPal Mass Pay direction; details in billing doc) (§7)
+- Subscription lifecycle webhook events (`subscription.changed`) (§12)
+- Dunning and payment failure handling (§11 — `billing.payment_failed` is transactional notification class)
+- Per-API-key request budget tier definitions (§22)
+
+### Webhook flow (architectural decision)
+
+When Throttle ships, billing events flow as: **Throttle → app's `/webhooks/throttle` handler → app emits its own standardized event to customer-defined webhooks per §12.**
+
+The app re-emits because:
+- Customers integrate with the app's domain events (e.g., `subscription.changed` with the org's data shape), not Throttle's internal event vocabulary.
+- The app can enrich (org context, plan tier names) and filter (only events the customer's webhook subscribed to).
+- Throttle credentials never reach customer endpoints.
+
+### Sections currently blocked on the billing doc
+
+- §7 Partner Program — commission calculation and payout flows
+- §8 Trials — conversion detection and expiration enforcement
+- §11 Notifications — `billing.payment_failed` semantics
+- §22 Rate Limiting — per-tier API key budgets
+
+Until §23 is upgraded out of stub status, these features remain ⏸️ blocked. Schema reserves the relevant fields so activation is a code change, not a migration.
+
+---
+
+# Part VI — Communication & Support
 
 ## 9. Email Infrastructure (Resend + react-email)
 
@@ -960,6 +1154,8 @@ This gives apps:
 - Easy testing
 
 Inline HTML strings are reserved for trivial one-off cases only (e.g., a single utility email that takes no variables). For Foundry, this means migrating PO send/follow-up templates to `react-email`.
+
+> **Foundry status (v3.6):** still fully inline HTML — no `react-email` dependency, no `src/emails/`. The per-org `poEmailTemplate` override shipped, but as `{{variable}}` string substitution over inline HTML. Resend integration, `isConfigured()` degradation, `RESEND_API_KEY`/`RESEND_FROM_ADDRESS` naming, and the signed inbound webhook (PO replies, `RESEND_WEBHOOK_SECRET`) all match the standard.
 
 Variable substitution happens via JSX props at render time — not via Resend's hosted template variables. This keeps templates portable and prevents Resend lock-in.
 
@@ -1075,6 +1271,8 @@ Reference: `app-foundry-ims-api/src/support/support.service.ts`.
 ## 11. Notifications & Notification Center
 
 Every app needs a **notification center** for in-app delivery, with **per-method preferences** users can configure. New in v3: a **transactional tier** that bypasses preferences for compliance-critical messages.
+
+> **Foundry status (v3.6): the largest schema gap in this doc.** Foundry's `Notification` is **org-scoped with no `userId` at all**, uses a boolean `read` (not `readAt`), and has no `audience` or `deliveryClass` — per-user fanout, audience resolution, and the transactional tier are unbuildable on the current shape without a migration. Categories are Foundry domain events (`order_sync`, `inventory`, `import`, `po_status`, `manufacturing`, `system`); none of the standard categories below exist. `NotificationPreference` is a single per-category `enabled` toggle (no bell/toast/email axis). UI: unread red dot (no count), recent-20 dropdown, no `/notifications` history page, no locked categories. Aligning Foundry here is a schema migration project, not an extension — sequence it as: per-user rows first, then per-method prefs, then `deliveryClass`.
 
 ### Required delivery methods
 
@@ -1197,9 +1395,13 @@ When an event fires `notificationsService.create({ category, deliveryClass, ... 
 
 ---
 
-## 12. Outbound Webhooks 🧭
+# Part VII — Platform Infrastructure
+
+## 12. Outbound Webhooks ✅
 
 For pushing events to customer endpoints. Inverse of API keys.
+
+> **Foundry status (v3.6): shipped, with contract deltas to reconcile.** Live: `WebhookEndpoint`/`WebhookDelivery` models (note the model name — not `Webhook`), full management API incl. `rotate-secret` and per-delivery replay, every-minute delivery worker, 8-attempt backoff, auto-disable on repeated failure, Settings → Outbound webhooks UI. Deltas from this section: headers are **`x-foundry-event` / `x-foundry-delivery-id` / `x-foundry-signature`** (`t=<ts>,v1=<hex>`), not `X-Epic-*` — since customers integrate with the app brand, the header prefix should probably become `x-<app>-*` in the standard; there is **no `dead_letter` state** (failed-after-8 is terminal but replayable); **no 3-failure warning notification**; **no usage endpoint / metrics**; **no truncation signaling**; and **secret rotation cuts over instantly** — the 24-hour dual-signing window prescribed below was actually built in Foundry's *other* webhook system (per-channel storefront webhooks carry `webhookSecretPrevious` + rotation timestamp) and should be ported here. The delivery worker's claim step is also a non-atomic read-then-update — racy the moment the API runs more than one instance (see §17.5 cron concurrency).
 
 ### Why this matters
 
@@ -1439,7 +1641,7 @@ model ActivityLog {
 
 Treat `source` as a closed enum for queryability; if an app needs a new source, add it to the standard list, not as a one-off string.
 
-> **Migration note:** Foundry currently stores `createdBy` as email. Migration required to backfill from email → User.id, with edge cases for emails of users who've left the org.
+> **Foundry status (v3.6):** the email→userId migration happened, but to a different shape than specified. There is no `createdBy` field — the actor is `userId` + `userEmail` + `actorType` (enum `MANUAL | SYSTEM | API_KEY | WEBHOOK | UNKNOWN`), stamped from ambient AsyncLocalStorage context; pre-migration rows read `UNKNOWN` (deliberately not `SYSTEM`, so old rows make no false claims). **`userEmail` is deliberately denormalized** so history stays readable after a user leaves — which conflicts with principle 11 ("logs reference user IDs, not emails") and this section's own `createdBy` comment. Decision needed: either bless the denormalized-email-snapshot pattern here (and require the §15.2 deletion job to scrub `ActivityLog.userEmail`), or drop the column. There's also no `partnerSeatId` on either log yet, and Foundry's live `source` values (`promote`, `gtin_match`, `csv_import`, `api`, `webhook`) don't come from the closed list above.
 
 ### Source field and partner attribution
 
@@ -1471,9 +1673,11 @@ await this.activityLog.log(orgId, {
 
 ---
 
-## 14.5 Security Audit Log 📋
+## 14.5 Security Audit Log ✅
 
 A separate log for **security-sensitive events**, distinct from the business activity log. Compliance teams will query this directly.
+
+> **Foundry status (v3.6):** shipped — `AuditLog` model (deliberately relation-free so rows survive org/user deletion) and the `/audit` admin page gated on `audit.read`. `auth.login` / `auth.logout` write from the Clerk session webhooks. Remaining baseline events below are instrumented incrementally; `partnerSeatId` not yet added. 7-year cold storage still open (checklist).
 
 ### Why separate?
 
@@ -1568,9 +1772,11 @@ UI: **Settings → Data Export** card with "Export All Data" button. Auth'd to O
 
 **Post-close availability:** When an org is closed (§3.10), the final export remains available for **30 days** before final purge. Closure dialog warns the OWNER and offers immediate export before deletion.
 
-### 15.2 User Right to Deletion 🧭
+### 15.2 User Right to Deletion ✅
 
 A **user** (not org) can request their personal data be deleted, independent of whether the org stays open.
+
+> **Foundry status (v3.6):** fully implemented — request/confirm/cancel/status endpoints under `/users/me`, 30-day grace + 24-hour immediate path, every-30-minutes execution cron, Clerk-delete-first ordering with the local tombstone in a single transaction, and `DataDeletionAudit` with HMAC'd email. Shape delta: there is no `DataDeletionRequest` model — request state lives as columns on `User` (`deletionRequestedAt`, `deletionScheduledFor`, `deletionFailureCount`, …). Functionally equivalent; the schema below should be treated as "either shape" for new apps. Open verification (checklist): confirm the deletion job scrubs denormalized email snapshots, including `ActivityLog.userEmail` (§14).
 
 #### Endpoint
 
@@ -1682,37 +1888,6 @@ model DataDeletionRequest {
 
 ---
 
-## 16. Session Permission Re-Validation 🚧
-
-**Every authenticated request re-validates the user's role and org membership against the local DB.** Sessions do NOT cache permissions until token expiry.
-
-### Why
-
-If an Admin is demoted to Viewer, the change must take effect quickly — not after their session expires. Silent stale permissions are a security and UX problem.
-
-### Implementation
-
-In `ClerkGuard` (or equivalent), after validating the Clerk JWT:
-
-1. Look up the local `User` row by `clerkUserId` + active `orgId`.
-2. Verify the user is still a member of the active org.
-3. Check `User.role` for the current value (don't trust JWT claims for role).
-4. If the user's role has changed or they've been removed: invalidate the session (return 401 with code `permission_changed`) and the frontend forces re-auth.
-
-### Cache TTL
-
-A 5–30 second cache TTL is acceptable for most apps and reduces DB load. Security-sensitive flows (admin actions, billing changes, partner seat permission changes) should bypass cache for sub-second invalidation. Document the TTL choice per app — 30s of stale Admin-vs-Viewer permissions is acceptable as a default; some apps may want tighter.
-
-### Frontend handling
-
-When the API returns a 401 with code `permission_changed`:
-- Clear local auth state
-- Redirect to `/login` with a flash message: "Your permissions have changed. Please sign in again."
-
-> **Foundry status:** Reads role fresh on every request ✅, but does not currently emit `permission_changed` 401. Audit item.
-
----
-
 ## 17. Error Tracking & Observability (Sentry)
 
 Every app uses **Sentry** for error tracking and performance monitoring via the shared **`@epic/sentry-config`** library.
@@ -1765,6 +1940,8 @@ APP_VERSION=<git sha or release tag>
 ```
 
 **Canonical env var: `APP_VERSION`** for the release identifier across every app. (Foundry currently uses `SENTRY_RELEASE` — audit item to rename.)
+
+> **Foundry status (v3.6):** `instrument.ts` loaded first ✅, `SentryGlobalFilter` ✅, plus uncaught-exception handlers and a prod heap-usage watchdog (worth standardizing). **Not shipped: any PII redaction** — no `beforeSend` at all, and `@epic/sentry-config` doesn't exist as a package yet. Release var is still `SENTRY_RELEASE`; `APP_VERSION` exists only as a hand-maintained constant in the health controller (drift risk — wire it from the build instead). The redaction gap is the substantive one.
 
 ### Logging conventions
 
@@ -1821,7 +1998,7 @@ Sentry.withScope((scope) => {
 
 ---
 
-## 17.5 Operational Patterns 📋
+## 17.5 Operational Patterns 🚧
 
 ### Health checks
 
@@ -1847,6 +2024,8 @@ Every app exposes `GET /health`:
 - **All other sub-checks are informational** (`clerk`, `resend`, `dispatch`, `throttle`, etc.). The app continues serving traffic even if Resend is down — login still works, dashboards still load, only the email-send path degrades. The status string for these can be `ok | degraded | down`, but `503` is reserved for database failure.
 
 This prevents minor third-party hiccups from cascading into total app outage via overzealous LB routing.
+
+> **Foundry status (v3.6):** shape differs — `/health` returns `{status, db, timestamp, version, config}` with no `checks` object and no third-party sub-checks, and a DB failure returns **200 with `status: "degraded"` rather than 503**, so the LB-rotation behavior this section calls critical isn't implemented. `version` comes from a hand-maintained constant (§17).
 
 ### Cron conventions
 
@@ -1891,6 +2070,8 @@ Standard scheduled jobs every app may need:
 - Activity log cold-storage migration (§14)
 - **Stale notification cleanup** — delete read `Notification` rows older than 90 days; unread rows kept indefinitely (or per app policy). Prevents the table from growing unbounded.
 - **Abandoned partner-trial-org cleanup** — delete pre-created partner trial orgs after 14 days if the invited client never signed in (§7).
+
+> **Foundry status (v3.6):** 26 cron jobs live via `@nestjs/schedule` (colocated per feature module rather than a single file — acceptable), including the abandoned-partner-trial cleanup and deletion-grace sweep. **No advisory locks or Redis SETNX anywhere** — five jobs have a per-process `running` boolean, which does nothing across instances, and the webhook delivery worker's claim step is a non-atomic read-then-update. This is safe only while the API runs a single ECS task; the locking requirement above is unmet and becomes urgent the day the service scales out. Also missing from the job list: the stale-API-key reminder (§13).
 
 ### Database migrations
 
@@ -1946,6 +2127,8 @@ Why this matters:
 - **Nice to demo with.** Screenshots and Loom videos with Futurama fixtures look intentional, not amateur.
 
 Convention: `scripts/seed-test.ts` (or app-equivalent) creates a complete `test` org wired with the Futurama cast, runnable locally and in CI. Each role has at least one Futurama character, every entity type has at least one example.
+
+> **Foundry status (v3.6):** exists as `scripts/seed-test-futurama.ts` (Planet Express, Bender component BOMs, Mom's / Omicron Persei / Slurm / DOOP channels). Add an npm script alias so it's discoverable.
 
 ### Internationalization (i18n)
 
@@ -2114,6 +2297,43 @@ This lets apps stub the webhook handler now (verify signature, persist event, no
 
 ---
 
+## 22. Rate Limiting 🚧
+
+Every public surface is rate-limited. Usage metrics are exposed so users see consumption before they hit caps.
+
+> **Foundry status (v3.6):** partially built, with a documented substitution — a custom in-memory fixed-window limiter runs per API instance (no Redis; the code marks distributed limiting as future work). Live: 300 req/min per ADMIN API key, per-endpoint storefront limits, `X-RateLimit-*` + `Retry-After` headers, structured 429 bodies. Not built: `@upstash/ratelimit`, per-IP signup limiting (signup is Clerk-hosted), the affiliate `/attribute` and auth per-IP limits, usage endpoints, and 80%-threshold notifications. The per-key default below (10k/hr) also doesn't match Foundry's actual 300/min — reconcile when Throttle tiers land.
+
+### Baseline limits
+
+| Surface | Limit | Notes |
+|---|---|---|
+| **Per-IP signup attempts** | 10 / hour | Blocks bot signup farms; doesn't friction real users. |
+| **Per-API-key request budget** | **Default for free / no-billing apps: 10,000 requests / hour per key.** Tier-based numbers come from the Throttle billing doc when it ships. | Apps without billing yet have a usable default; Throttle-driven tiers override when ready. |
+| **Per-org webhook deliveries (outbound)** | 1000 / minute baseline | Configurable higher for ecommerce-heavy customers. |
+| **Per-org Sentry error submission** | 1000 errors / minute | App-side cap on what we submit to Sentry — defends Sentry budget against runaway error loops in our own code. (Sentry has its own quota separately; this is upstream of that.) |
+| **Per-IP affiliate `/attribute`** | 30 / hour | Anti-fraud; blocks attribution farming. |
+| **Per-IP password reset / magic link** | 10 / hour | Anti-brute-force on auth flows. |
+
+### Usage metrics — visibility before failure
+
+**Every rate-limited resource must expose usage metrics** so users see how close they are to limits. Implementation patterns:
+
+- **API responses** include `X-RateLimit-Remaining` and `X-RateLimit-Reset` headers
+- **Settings pages** show real-time consumption gauges (e.g., "850 / 1000 webhooks this minute")
+- **`GET /webhooks/:id/usage`**, `GET /apikeys/:id/usage` etc. surface usage programmatically
+- **Notifications fire at 80% threshold** (transactional class) so users have time to react
+
+This is a deliberate operational stance: **rate-limit transparently, not silently.** Hitting a hard limit without visibility is a worse experience than seeing the limit approach and either upgrading tier or reducing load.
+
+### Implementation
+
+- **Default library: `@upstash/ratelimit`** with the Upstash Redis backend (or self-hosted Redis if the app already runs one). Edge-friendly, distributed, simple sliding-window primitive. Apps free to substitute (`express-rate-limit + rate-limit-redis`, fastify-rate-limit, etc.) if they have a load-bearing reason — but document the divergence.
+- 429 responses include `Retry-After` headers and structured error bodies (`{ error: "rate_limited", retryAfter: <seconds>, limit, remaining: 0 }`).
+
+---
+
+# Part VIII — Web Presence & Marketing
+
 ## 18. Marketing Site Contract
 
 The marketing site is the **front door** for new signups, not just a brochure. It hosts the actual signup form (via embedded Clerk), the conversion thank-you page where pixels fire, and the affiliate-link cookie capture.
@@ -2126,8 +2346,8 @@ Every marketing site must have:
 2. **`/signup`** — embedded Clerk `<SignUp />` component (per §3.2). Signup happens here, on the marketing domain.
 3. **`/welcome`** — thank-you page, conversion pixel host (per §18.3). Users land here after Clerk completes signup.
 4. **CTAs throughout the site** that route to `/signup` (NOT to `app.<rootdomain>`).
-5. **`/partners`** 🧭 — explains the partner program.
-6. **`/partners/apply`** 🧭 — submits to API.
+5. **`/partners`** ✅ — explains the partner program.
+6. **`/partners/apply`** ✅ — submits to API. *(Foundry status: page exists but has no form — it routes into `/signup` + the in-app application (§7). Either build the form or amend this line to "routes to the in-app application.")*
 
 ### 18.2 Affiliate cookie capture (cross-subdomain)
 
@@ -2176,6 +2396,9 @@ The welcome page also:
 - Optionally clears the `affiliateR` cookie (it's been used for attribution; no further purpose).
 - Shows a brief celebration / orientation (e.g., "Your workspace is ready").
 - Presents a **"Continue to Dashboard"** primary CTA → `app.<rootdomain>`. Clerk session is already live (cross-subdomain), so the user lands directly in the dashboard.
+- **Is `noindex`** (v3.6) — `/welcome` (and `/signup`) should carry a noindex meta and stay out of the sitemap; conversion pages aren't crawl targets.
+
+> **Foundry status (v3.6):** `/welcome` is live with GTM/GA4 + Meta + LinkedIn wired (env-gated) and clears the cookie; TikTok/Reddit not wired (fine — no ads on those channels). Two gaps: GTM currently loads **only on `/welcome`**, not site-wide as recommended above, and both `/welcome` and `/signup` are indexable + in the sitemap (the new noindex rule).
 
 ### 18.4 Cookie consent
 
@@ -2187,6 +2410,8 @@ Every marketing site that targets EU traffic implements a consent banner. **Stan
 **Legal sign-off on the affiliate cookie's "functional" categorization is still pending.** Until cleared, apps targeting EU traffic should re-categorize the affiliate cookie as "marketing" and require opt-in. Apps not targeting EU traffic may skip the banner entirely; document that decision per app.
 
 Reference: `astro-foundryims/src/layouts/Layout.astro` for the cookie capture script.
+
+> **Foundry status (v3.6): nothing shipped.** No consent banner, `@epic/cookie-consent` doesn't exist as a package, Ahrefs analytics loads unconditionally on every page, and the affiliate cookie is set without a consent gate. The standard requires either a banner or a documented per-app decision to skip — neither exists. Decision needed (now on the audit checklist).
 
 ---
 
@@ -2208,6 +2433,8 @@ Every app uses its own root domain. The structure within that domain is consiste
 **Cross-subdomain cookie scope.** The `affiliateR` cookie (§6, §18.2) is set with `Domain=.<rootdomain>` so it follows the prospect across `<rootdomain>`, any landing-page subdomain, `accounts.<rootdomain>` (Clerk), `app.<rootdomain>` (admin), and is readable server-side from `api.<rootdomain>` requests. Clerk session cookies follow the same pattern (Clerk handles this when you configure the vanity subdomain).
 
 ---
+
+# Part IX — Adoption & Governance
 
 ## 20. New-App Standardization Checklist
 
@@ -2270,8 +2497,45 @@ When bootstrapping the next app, replicate in this order:
 
 ### Deferred (build when ready, schema reserves now)
 - [ ] **Outbound webhook infrastructure** per §12 — `Webhook` + `WebhookDelivery` models in initial schema even if not wired
-- [ ] **Partner program** per §7 — port wholesale once first app ships it; `accountType` + `Referral.referralType` already in schema
+- [ ] **Partner program** per §7 — port from Foundry (shipped); `accountType` + `Referral.referralType` already in schema
 - [ ] **Trial period + Throttle integration** per §8 / §23 — separate billing standardization doc, integration points reserved
+
+### Required screens — auth / affiliate / partner / billing (v3.6)
+
+The canonical screen inventory for the standardized functionality. Every app ships all of these (billing group ⏸️ until Throttle); "screen" includes dialogs that carry a full flow. This is the bulletproofing checklist for QA: each screen maps to API surfaces defined in its section, and a workflow test should walk each one as a brand-new user.
+
+**Marketing site (§3.2, §18):**
+1. `/signup` — embedded Clerk `<SignUp />`, cookie → `unsafeMetadata` wiring, noindex
+2. `/welcome` — conversion pixels, "Continue to Dashboard", noindex
+3. `/partners` — program explainer
+4. `/partners/apply` — application entry (form or route into the in-app application)
+
+**Auth & org (§3, §4, §15):**
+5. Admin `/login` (+ `/signup` fallback route)
+6. Org switcher — switch / create / leave, active indicator
+7. Settings → General — org name/logo, Danger Zone close with typed confirm + final-export offer
+8. Settings → Users — members, pending invites, role dropdown, remove
+9. Settings → Privacy — export my data · delete my account (30-day + immediate) · deletion status/cancel
+
+**Affiliate (§6):**
+10. Settings → Affiliate — link card + copy, stat cards, signups table; visible to every role
+
+**Partner / referral (§5, §7):**
+11. Settings → Partner Program — in-app application + application status (any user)
+12. Partner dashboard — Referrals tab · Seats tab · "Create trial for client" dialog · Team tab (⏸️) · Commissions tab (⏸️) · Profile/payout tab (⏸️)
+13. Promote-client-to-owner confirm flow (the Path B election)
+14. Settings → Partners (client side) — seats granted, permission-tier select, revoke
+15. Internal admin — partner application review queue (approve / reject)
+
+**Billing (§8, §23 — all ⏸️ until Throttle):**
+16. Settings → Billing — current plan, payment method, invoice history
+17. Trial state — countdown banner + upgrade CTA (admin shell)
+18. Plan picker — convert / upgrade / downgrade, with proration preview
+19. Cancel + reactivate flow — typed confirm, end-of-period notice
+20. Partner billing view — white-label client subscriptions invoiced at 80% of list, per-client model election (white-label ⇄ client-paid)
+21. Dunning — payment-failed banner + `billing.payment_failed` transactional notification
+
+Supporting infrastructure screens (support §10, notifications §11, API keys §13, activity §14, audit §14.5, webhooks §12) are enumerated in their own sections' "UI surfaces" blocks.
 
 ---
 
@@ -2287,7 +2551,7 @@ When bootstrapping the next app, replicate in this order:
 
 5. **Action is proof of attribution.** Partner-tier referral credit requires the partner to physically create the trial. No forms, no disputes.
 
-6. **Two referral tiers, one model.** Both `affiliate` and `direct` referrals earn 10% recurring, no cap. Partner status unlocks the partner dashboard, partner seats, and the trial-creation flow — but the commission rate is the same.
+6. **Two referral tiers, one model — plus the partner election.** Both `affiliate` and `direct` referrals earn 10% recurring, no cap, on client-paid orgs. Partner status unlocks the partner dashboard, partner seats, the trial-creation flow, and a per-client election: stay white-label and take a 20% discount at source, or spin ownership to the client and take the 10% commission (§7). One client, one model, never both.
 
 7. **Schema reserves the future.** `convertedAt`, `rewardStatus`, `accountType`, `Webhook`, `AuditLog`, `scopes` exist in the model even before billing/partner/scope code does. New apps copy them so the migration on activation is zero-schema.
 
@@ -2307,101 +2571,3 @@ When bootstrapping the next app, replicate in this order:
 
 15. **Transactional notifications bypass preferences.** Users can't opt out of deletion confirmations, security alerts, or payment failures. Compliance and account safety override convenience.
 
----
-
-## 22. Rate Limiting 📋
-
-Every public surface is rate-limited. Usage metrics are exposed so users see consumption before they hit caps.
-
-### Baseline limits
-
-| Surface | Limit | Notes |
-|---|---|---|
-| **Per-IP signup attempts** | 10 / hour | Blocks bot signup farms; doesn't friction real users. |
-| **Per-API-key request budget** | **Default for free / no-billing apps: 10,000 requests / hour per key.** Tier-based numbers come from the Throttle billing doc when it ships. | Apps without billing yet have a usable default; Throttle-driven tiers override when ready. |
-| **Per-org webhook deliveries (outbound)** | 1000 / minute baseline | Configurable higher for ecommerce-heavy customers. |
-| **Per-org Sentry error submission** | 1000 errors / minute | App-side cap on what we submit to Sentry — defends Sentry budget against runaway error loops in our own code. (Sentry has its own quota separately; this is upstream of that.) |
-| **Per-IP affiliate `/attribute`** | 30 / hour | Anti-fraud; blocks attribution farming. |
-| **Per-IP password reset / magic link** | 10 / hour | Anti-brute-force on auth flows. |
-
-### Usage metrics — visibility before failure
-
-**Every rate-limited resource must expose usage metrics** so users see how close they are to limits. Implementation patterns:
-
-- **API responses** include `X-RateLimit-Remaining` and `X-RateLimit-Reset` headers
-- **Settings pages** show real-time consumption gauges (e.g., "850 / 1000 webhooks this minute")
-- **`GET /webhooks/:id/usage`**, `GET /apikeys/:id/usage` etc. surface usage programmatically
-- **Notifications fire at 80% threshold** (transactional class) so users have time to react
-
-This is a deliberate operational stance: **rate-limit transparently, not silently.** Hitting a hard limit without visibility is a worse experience than seeing the limit approach and either upgrading tier or reducing load.
-
-### Implementation
-
-- **Default library: `@upstash/ratelimit`** with the Upstash Redis backend (or self-hosted Redis if the app already runs one). Edge-friendly, distributed, simple sliding-window primitive. Apps free to substitute (`express-rate-limit + rate-limit-redis`, fastify-rate-limit, etc.) if they have a load-bearing reason — but document the divergence.
-- 429 responses include `Retry-After` headers and structured error bodies (`{ error: "rate_limited", retryAfter: <seconds>, limit, remaining: 0 }`).
-
----
-
-## 23. Billing & Throttle Integration ⏸️ (stub)
-
-> **Status as of v3.2:** Throttle is Epic's intended billing platform — **not yet built or live**. Phase: **design**. ETA: **TBD, gated on its own design doc**. Until §23 is upgraded out of stub status, **do not depend on Throttle for any blocking design decision in any app**. Sections marked ⏸️ in §2 are blocked on this doc landing.
-
-### What Throttle is (and isn't)
-
-Throttle will be Epic's billing platform — a Stripe-style layer that issues invoices, processes subscriptions, and emits billing events. **It is not a system of record for users or organizations** — Clerk is, and stays so. Throttle's customer records are a downstream subscription view of the same orgs that already exist in Clerk + the local DB.
-
-### Customer-to-org mapping (canonical)
-
-To avoid the three-source-of-truth problem (Clerk users, Throttle customers, local DB), the mapping is locked in upfront:
-
-- **One Throttle customer per Clerk Organization.** The local `Organization` row carries a `throttleCustomerId String? @unique` field reserving the link.
-- **Throttle has no concept of users.** Subscription state belongs to the org. Individual users don't have separate billing profiles. (If multi-user billing visibility is needed, that's a Throttle Dashboard role concern, not a Clerk-level identity concern.)
-- **Direction of trust:** the local DB is canonical for org existence; Throttle is canonical for subscription state. When an org is created, we provision a Throttle customer in the same transaction. When an org is closed, we cancel the Throttle customer.
-- **No customer record exists for users who aren't in any org.** Rules out a "personal billing profile separate from work account" model. Aligns with B2B SaaS norms.
-
-This locks in **two** sources of truth (Clerk identity + Throttle billing) instead of three, with one-way provisioning from Org → Throttle.
-
-### Reserved schema
-
-Add to `Organization` ahead of Throttle integration so activation is a code change, not a migration:
-
-```prisma
-model Organization {
-  // ... existing fields
-  throttleCustomerId  String?  @unique  // populated when Throttle integration ships
-}
-
-model BillingEvent {
-  // see §17.5 Throttle webhook stub — already reserved
-}
-```
-
-### Reserved integration points
-
-This doc reserves integration points for:
-
-- Trial creation, expiration, and reminder emails (§8)
-- Trial-to-paid conversion detection and `Referral.convertedAt` updates (§7, §8)
-- Partner commission calculation (10% recurring, monthly accrual, paid month N+1) (§7)
-- Payout processing (PayPal Mass Pay direction; details in billing doc) (§7)
-- Subscription lifecycle webhook events (`subscription.changed`) (§12)
-- Dunning and payment failure handling (§11 — `billing.payment_failed` is transactional notification class)
-- Per-API-key request budget tier definitions (§22)
-
-### Webhook flow (architectural decision)
-
-When Throttle ships, billing events flow as: **Throttle → app's `/webhooks/throttle` handler → app emits its own standardized event to customer-defined webhooks per §12.**
-
-The app re-emits because:
-- Customers integrate with the app's domain events (e.g., `subscription.changed` with the org's data shape), not Throttle's internal event vocabulary.
-- The app can enrich (org context, plan tier names) and filter (only events the customer's webhook subscribed to).
-- Throttle credentials never reach customer endpoints.
-
-### Sections currently blocked on the billing doc
-
-- §7 Partner Program — commission calculation and payout flows
-- §8 Trials — conversion detection and expiration enforcement
-- §11 Notifications — `billing.payment_failed` semantics
-- §22 Rate Limiting — per-tier API key budgets
-
-Until §23 is upgraded out of stub status, these features remain ⏸️ blocked. Schema reserves the relevant fields so activation is a code change, not a migration.
