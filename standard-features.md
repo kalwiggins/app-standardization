@@ -1,4 +1,4 @@
-# Epic Design Labs — Standard Features (v3.8)
+# Epic Design Labs — Standard Features (v3.9)
 
 **Canonical reference** for the foundational features every Epic Design Labs app should have. New apps adopt this whole stack so users get a consistent experience — same login, same org model, same affiliate program, same support widget — across the whole portfolio.
 
@@ -22,7 +22,7 @@
 
 **Reference implementation:** Foundry IMS (api: `Epic-Design-Labs/app-foundry-ims-api`, admin: `app-foundry-ims-admin`, marketing: `astro-foundryims`). Foundry is the most current implementation; if you find a better pattern, propose a standard update rather than diverging silently.
 
-**Document structure (v3.8):** sections are grouped into thematic parts; **§ numbers are stable identifiers and are no longer strictly sequential** (relocated sections keep their numbers so cross-references — including code comments citing them — stay valid).
+**Document structure (v3.9):** sections are grouped into thematic parts; **§ numbers are stable identifiers and are no longer strictly sequential** (relocated sections keep their numbers so cross-references — including code comments citing them — stay valid).
 
 - **Part I — Foundations:** §1 Overview · §2 Status Table + Foundry audit checklist
 - **Part II — Auth & Identity:** §3 Auth & Organizations · §4 Users & Roles · §5 Account Types · §16 Session Permission Re-Validation
@@ -30,9 +30,40 @@
 - **Part IV — Referrals & Partner Program:** §7
 - **Part V — Billing (Throttle):** §8 Trials + subscription lifecycle · §23 Throttle Integration · §24 Plan Entitlements & Feature Gating
 - **Part VI — Communication & Support:** §9 Email · §10 Support · §11 Notifications
-- **Part VII — Platform Infrastructure:** §12 Outbound Webhooks · §13 API Keys · §14 Activity Log · §14.5 Audit Log · §15 Export & Deletion · §17 Sentry · §17.5 Operational Patterns · §22 Rate Limiting · §25 Tenancy Enforcement
+- **Part VII — Platform Infrastructure:** §12 Outbound Webhooks · §13 API Keys · §14 Activity Log · §14.5 Audit Log · §15 Export & Deletion · §17 Sentry · §17.5 Operational Patterns · §22 Rate Limiting · §25 Tenancy Enforcement · §26 Agent Access (MCP) · §27 Public API Documentation
 - **Part VIII — Web Presence & Marketing:** §18 Marketing Site Contract · §19 Domain Conventions
 - **Part IX — Adoption & Governance:** §20 New-App Checklist + Required Screens · §21 Principles
+
+### Changes in v3.9
+
+**Theme: the reference implementation reached 100% of the non-billing auth/affiliate/partner baseline (Foundry api v3.66–v3.68, 2026-08-31) — and the standard absorbs what building it settled.** Every v3.6 "needs a decision" flag in those areas is now decided: some by fixing Foundry, some by amending the prescription that shipped experience contradicted. Billing-dependent items (§6 commission accrual, §7 conversion/election mechanics, §8 lifecycle) remain with the Throttle adoption phase.
+
+**Prescriptions amended (reality won):**
+
+- **§3.1/§3.3 — org auto-provisioning is Clerk-native now.** The app-side `user.created` provisioning path + admin first-load fallback are withdrawn: Clerk's "Create first organization automatically" (with naming rules) ships the §3.3 experience with zero code, and the webhook path would *race* Clerk's membership-required signup UI. §3.1's `automatic_organization_creation: false` is inverted to ON. Webhooks now exist to mirror, never to provision. Verified in Foundry production 2026-08-31.
+- **§3.6 — "push on login" deleted.** Per-request Clerk-metadata writes are banned outright: the pattern caused Foundry's 5–15s page loads (guard writes serializing on a row lock). Write-on-change is the whole sync story; the client tolerates briefly-stale `publicMetadata` because the API never trusts it.
+- **§16 — the `permission_changed` frontend handling is reload-and-explain, not redirect-to-/login.** With Clerk the session is still valid, so a /login redirect bounces straight back in. The intent — no client operating on stale permissions — is met by a hard reload plus a "your permissions changed" notice. Also stated: the change detector may be per-process; each instance failing once is acceptable.
+- **§4 — MEMBER gets a real definition.** The old baseline gave MEMBER nothing but settings/support/affiliate reads — unusable in any real app, so every app would have extended it divergently. MEMBER is now defined as **standard operational access**: full day-to-day read/write in the app's domain, zero org administration (no users/API keys/webhooks/apps/settings-write/audit/export). Includes the migration pattern for apps that had MEMBER aliased to ADMIN: promote existing rows, never silently strip.
+- **§3.7/§3.9 — guarded role sync.** Clerk's `org:admin`/`org:member` is a lossy 2-value projection of an app's role enum; a membership event may only move a user within the generic ADMIN↔MEMBER pair, and must never overwrite OWNER or an app-specific role. (The unguarded mapping silently reset a WAREHOUSE invitee to MEMBER — invisible in Foundry precisely while MEMBER≡ADMIN.) Plus: the first `org:admin` member of an OWNER-less org becomes OWNER — without this rule, Clerk-organic orgs have no one holding `org.close`.
+- **§3.9 — webhook failure handling gets a taxonomy.** "Return 5xx so Clerk retries" taken literally causes retry storms on permanently-unprocessable events; ack-and-log-everything (Foundry's old behavior) hides real failures behind healthy 200s. The rule is now: *unresolvable* events (unknown org, missing rows) log-and-return 200 inside the handler; only *transient* failures (DB down, provider error) propagate as 5xx. Handlers stay idempotent either way.
+- **§12 — header prefix ruling: `x-<app>-*`, not `X-Epic-*`.** Customers integrate with the app's brand; the portfolio is an internal fact. `X-Epic-App` survives as an optional disambiguator.
+- **§14 — the denormalized actor-email snapshot is blessed.** `userEmail` alongside `userId` keeps history readable after a user leaves; the cost is a §15.2 obligation — the deletion job MUST scrub the snapshots. Principle 11 gains this exception explicitly.
+- **§4 guard hazards — "audit for it" becomes "a test fails on it."** The class-level-`@Public()` grep is now a required CI spec (a source-scan test that fails the build), alongside the `@SkipSessionAuth`-style narrow opt-out: a controller may skip the session guards only by a decorator honored by *named* guards, and the same spec enforces that every user of it installs its replacement auth guard. A decayed one-time audit is how the hazard shipped in the first place.
+
+**New sections:**
+
+- **§26 Agent Access (MCP)** — the portfolio pattern for giving AI agents (Claude, ChatGPT, n8n, etc.) access to an app: MCP server topology, per-user org-pinned credentials, first-party OAuth with RFC 7591 dynamic client registration, directory listings, and the operational lessons (token-rotation races, one-session-per-tool-call clients). Foundry is the reference implementation; every app should expect this ask.
+- **§27 Public API Documentation** — the audited-docs contract: an explicit module allow-list per public doc, 100% operation summaries and schema-property descriptions, maintenance endpoints excluded, and the toolchain traps that silently produce undocumented or over-documented APIs.
+
+**Also:**
+
+- **§3.4** disposable-email override mechanism now ✅ (Foundry: staff-gated, audited, expiring; UI placement and staff-email attribution accepted as equivalent to the spec's shape).
+- **§7** gains assignment-enforcement semantics: the `autoAssignAll` default (ON = every partner-org member may act on every seat, assignment rows advisory; OFF = explicit assignments are the access list) and the rule that enforcement, when wired, happens at org-resolution time. Foundry status updated: profile/payout + team + assignment endpoints ✅ (management surfaces; enforcement deferred to the billing phase).
+- **§13** absorbs Foundry's key-architecture extensions as the standard: key *types* (ADMIN vs surface-scoped keys like STOREFRONT with resource binding), per-key scopes that override role when present, and **grantable-scopes** — a user can never mint a key more powerful than their own role.
+- **§14.5** gains the platform-level-events convention: global staff actions (e.g. disposable overrides) log to the acting staff member's org with a self-describing `resource`, rather than inventing an org-less audit store.
+- **§16** status 🚧→✅ (Foundry ships the 401 + client handling).
+- **§18.3** conversion pages: Foundry's `/signup` + `/welcome` are now noindex and sitemap-excluded.
+- §2 status table + Foundry audit checklist synced to api v3.68.0 / admin (2026-08-31).
 
 ### Changes in v3.8
 
@@ -261,9 +292,9 @@ The exceptions are **shared libraries** (e.g., `@epic/disposable-emails`, `@epic
 | Affiliate code generation + dashboard | ✅ | One code per org. `Organization.affiliateCode` (8-char), Settings → Affiliate page, stats + signups table. `User.affiliateCode` dropped. |
 | Affiliate signup attribution | ✅ | `?r=` cookie → `unsafeMetadata.affiliateCode` → attribution on `organizationMembership.created` webhook (code cleared from Clerk after use); admin post-auth callback kept as fallback. Idempotent; last-touch wins. |
 | Marketing-site signup front door (§3.2/§18) | ✅ | `foundryims.com/signup` embedded Clerk + `/welcome` conversion page + cross-subdomain cookie live; link rewriting removed; `accounts.` vanity subdomain CNAME'd. |
-| Disposable email blocking at signup | 🚧 | `disposable-email-domains` wired in; rejects on invite, org-create, and partner-trial paths. Warn-only in the Clerk `user.created` webhook until auto-provisioning lands (§3.3). |
+| Disposable email blocking at signup | 🚧 | Rejects on invite, org-create, and partner-trial paths; per-domain staff overrides with audit + expiry shipped (§3.4). Still warn-only for organic signups (the `user.created` webhook can't reject a user Clerk already created — blocking organic signups needs a Clerk-side restriction, open question). |
 | Partner role / `accountType` | ✅ | `User.accountType` live; toggled on application approval; pushed to Clerk `publicMetadata` on change (not per-request — see §3.6). |
-| Partner dashboard + partner seats | ✅ | Referrals + Active seats tabs, "Create trial for client" dialog, Settings → Partners (client side) with per-seat tier control. Commissions/team-assignment endpoints still ⏸️ billing. |
+| Partner dashboard + partner seats | ✅ | Referrals/Seats/Team/Settings tabs, "Create trial for client" dialog, profile + payout settings, team seat assignments + `autoAssignAll` (§7), client-side per-seat tier control. Commissions endpoints still ⏸️ billing; assignment *enforcement* deferred with them. |
 | Partner-created trials (direct referral) | ✅ | `POST /partner/trials` + `referralType: "direct"` + daily abandoned-trial cleanup cron. |
 | Trial period / `trialEndsAt` | ✅ Evident · ⏸️ Foundry | Live in Evident with the §8 expiry guard. Foundry has only an `isPartnerTrial` boolean — the reserved fields (§3.5, §23) were never added. |
 | Trial-expiry sweep safety guard | 🚧 | **Required** (§8): never expire a subscription paid into the future; log skipped rows loudly. Implemented in Evident after it nearly locked out a paying customer. Not present anywhere else; no test harness on the worker that runs it. |
@@ -286,8 +317,8 @@ The exceptions are **shared libraries** (e.g., `@epic/disposable-emails`, `@epic
 | API keys | ✅ | `<prefix>_*` prefixed keys, role- or scope-gated, hashed in DB. Foundry adds `keyType` (ADMIN \| STOREFRONT) + channel binding; `expiresAt` supported by API but not exposed in the create UI. |
 | Data export | ✅ | `GET /orgs/me/export` returns a ZIP of CSVs. |
 | Right to deletion (GDPR/CCPA) | ✅ | Shipped in Foundry: 30-day grace + 24h immediate path, Clerk-delete-first tombstone, HMAC email audit. Shape differs from spec (state on `User`; no `DataDeletionRequest` model) — see §15.2 Foundry status. |
-| Users & roles (RBAC) | ✅ | Invite via Clerk, local role assignment, permission decorators. All 13 baseline permissions exist. Foundry's role→permission mapping diverges — see §4 Foundry status. |
-| Session permission re-validation | 🚧 | Foundry re-reads role behind a 30s single-flight cache; still no `permission_changed` 401 on demotion. |
+| Users & roles (RBAC) | ✅ | Invite via Clerk, local role assignment, permission decorators. Foundry's mapping now matches §4 (MEMBER operational re-map shipped 2026-08-31, existing MEMBERs promoted to ADMIN); contract pinned by a denial-asserting spec. |
+| Session permission re-validation | ✅ | Foundry: role re-read behind a 30s single-flight cache; role change fails once with the coded 401; admin reloads + explains. (§16, amended handling.) |
 | Sentry observability | 🚧 | Foundry has Sentry init + global filter. No `beforeSend`/PII redaction shipped; `@epic/sentry-config` does not exist yet; release var still `SENTRY_RELEASE`. |
 | Rate limiting | 🚧 | Foundry runs a custom in-memory fixed-window limiter (per ECS task): 300/min per ADMIN API key + per-endpoint storefront limits, with `X-RateLimit-*`/`Retry-After` headers. No Redis, no per-IP signup limit, no usage endpoints — see §22 Foundry status. |
 | Health checks | 🚧 | Foundry has `/health` but not the standardized shape: no `checks` object, DB failure returns 200 "degraded" rather than 503 — see §17.5 Foundry status. |
@@ -297,10 +328,12 @@ The exceptions are **shared libraries** (e.g., `@epic/disposable-emails`, `@epic
 | Tenancy: default-deny data layer | 🧭 | §25. **Not built anywhere.** Supersedes PR review as the mechanism — that mechanism let the same bug through three times in one app. |
 | Background-worker test harness | 📋 | §17.5. Required where a job can revoke access, delete data, or move money. Evident's worker has **no jest config and no test script**; the trial-expiry cron lives there. |
 | Custom fields | ✅ | Per-entity custom field defs + values. |
+| Agent access (MCP) | ✅ Foundry · 📋 elsewhere | §26: edge MCP server, per-user org-pinned keys, first-party OAuth + RFC 7591 DCR, directory listings. In production since 2026-07. |
+| Public API documentation | ✅ Foundry · 📋 elsewhere | §27: allow-listed public docs, 100% summaries + schema descriptions, maintenance endpoints excluded. Audited 2026-08-30. |
 
 ### Foundry audit checklist (work to align reference impl with v3)
 
-Statuses synced to the shipped repos 2026-08-23 (api v3.54.x).
+Statuses synced to the shipped repos 2026-08-31 (api v3.68.0).
 
 - [x] Drop `User.clerkUserId @unique` constraint, add `@@index([clerkUserId])` to support multi-org users *(done — nullable + indexed, `20260503143134_user_tombstone_fields`)*
 - [x] Make `User.email`, `User.name`, `User.clerkUserId` nullable for tombstoning per §3.5 *(done, same migration)*
@@ -308,22 +341,22 @@ Statuses synced to the shipped repos 2026-08-23 (api v3.54.x).
 - [x] Verify `Referral.referrerOrgId` references local `Organization.id` *(done — SetNull relation + `affiliateCode` snapshot + `sharedByUserId`)*
 - [x] Migrate `ActivityLog.createdBy` from email to userId *(done differently: actor is `userId` + `userEmail` + `actorType` enum stamped via AsyncLocalStorage; pre-existing rows read `UNKNOWN`; `userEmail` deliberately denormalized — see §14 Foundry status for the principle-11 tension)*
 - [x] Add `support.read/write`, `affiliate.read`, `apikeys.manage`, `activity.read`, `audit.read`, `export.run`, `notifications.manage`, `webhooks.manage` as named permissions per §4 baseline *(all present in `src/auth/permissions.ts`; `notifications.manage` not yet checked by any admin surface)*
-- [ ] Add `permission_changed` 401 emission on session role mismatch per §16
+- [x] Add `permission_changed` 401 emission on session role mismatch per §16 *(done — api v3.67.0 + admin reload/toast handling, 2026-08-31)*
 - [ ] Add per-method notification preferences (bell/toast/email per category) + `deliveryClass` field per §11 — note this now requires migrating `Notification` to per-user rows first (§11 Foundry status)
 - [ ] Migrate transactional emails to `react-email` (current PO send/follow-up are inline HTML strings) per §9
 - [ ] Adopt `@epic/sentry-config` with PII redaction per §17 *(library itself not yet created)*
 - [ ] Rename `SENTRY_RELEASE` env var to `APP_VERSION` per §17 *(`APP_VERSION` currently exists only as a hand-maintained constant in `health.controller.ts`)*
-- [ ] Implement smooth-signup auto-create-org flow per §3.3 *(the `user.created` handler exists but is log-only — "auto-provisioning deferred"; admin has no zero-membership fallback either. First: confirm in the Clerk dashboard whether automatic org creation is covering this today, per the §3.3 open question)*
+- [x] Implement smooth-signup auto-create-org flow per §3.3 *(resolved 2026-08-31 the v3.9 way: Clerk's "Create first organization automatically" toggle flipped ON — no app code; the previously-prescribed webhook path is withdrawn)*
 - [x] **Move signup form from `app.foundryims.com/signup` to `foundryims.com/signup`** per §3.2 *(done — `@clerk/astro` embedded `<SignUp />` with cookie→`unsafeMetadata` wiring; admin `/signup` retained as fallback)*
-- [x] Build `foundryims.com/welcome` thank-you page per §18.3 *(done — GTM/GA4 + Meta + LinkedIn wired, env-gated; TikTok/Reddit not wired; page is currently indexable — see §18.3 note)*
+- [x] Build `foundryims.com/welcome` thank-you page per §18.3 *(done — GTM/GA4 + Meta + LinkedIn wired, env-gated; TikTok/Reddit not wired; noindex + sitemap exclusion live 2026-08-31)*
 - [x] Configure Clerk vanity subdomain `accounts.foundryims.com` per §19 *(done — CNAME live)*
 - [x] Set Clerk post-signup redirect to `https://foundryims.com/welcome` *(done via `forceRedirectUrl="/welcome/"` on the embedded component)*
 - [x] Update marketing-site cookie capture script to use `Domain=.foundryims.com` per §18.2 *(done)*
 - [x] Remove the URL-bridge link rewriting from `astro-foundryims/src/layouts/Layout.astro` *(done)*
-- [ ] Add `user.created` org auto-provisioning per §3.9 *(the handler + svix verification exist and cover 12 event types; affiliate attribution moved to `organizationMembership.created` and works — but org auto-provision from `user.created` is still a stub)*
+- [x] ~~Add `user.created` org auto-provisioning per §3.9~~ *(withdrawn in v3.9 — `user.created` is mirror-only by design; org creation is Clerk-native per §3.3)*
 - [ ] Migrate from current billing (whatever is in place) to Throttle per §23 — **no longer blocked; Throttle is live.** Start from Evident's `billing/` + `throttle/` modules and copy `resolve-organization.spec.ts` verbatim
-- [ ] **New (v3.7):** audit for `@Public()` on controller *classes* — it disables every other guard on the controller (§4)
-- [ ] **New (v3.7):** add a denial-asserting test for every guard; an allow-only test cannot distinguish a working guard from a no-op (§4)
+- [x] **New (v3.7):** audit for `@Public()` on controller *classes* (§4) *(done 2026-08-31 — eliminated across 10 storefront controllers via `@SkipSessionAuth`, route-level-only enforcement in both guards, and a CI source-scan spec that fails the build on recurrence)*
+- [x] **New (v3.7):** add a denial-asserting test for every guard (§4) *(done for the auth-critical set 2026-08-31: ClerkGuard, PermissionGuard, StorefrontAuthGuard, feature-toggle guard, plus the §4 role-mapping contract spec)*
 - [ ] **New (v3.7):** add the `BillingEvent` idempotency table per §23 *(exists in no app, Evident included)*
 - [ ] **New (v3.8):** implement the plan entitlement gate per §24, with the §24.3 live-account audit run **before** activation and the §24.4 upgrade prompt shipped **first**
 - [ ] **New (v3.8):** separate plan entitlement from tenant feature toggles per §24.1 if they currently share a field
@@ -352,9 +385,9 @@ Required settings in every Clerk project:
 - **Sign-up enabled** — open self-serve signup. (Restrict via Clerk's allowlist if you need invite-only later.)
 - **Magic link, Google, Apple** sign-in methods enabled.
 - **Organizations enabled.**
-- **`force_organization_selection: false`** — let users land in the app immediately after signup; we auto-create an org in code (see §3.3).
-- **`automatic_organization_creation: false`** — Clerk doesn't auto-create either; we control the flow so we can also write the local Org row + send the right magic link.
-- **Organization name template** — `"{{user.first_name}}'s Organization"` (fallback `"My Organization"`).
+- **Membership required** — users must belong to an organization (standard B2B mode).
+- **Create first organization automatically: ON** *(v3.9 — inverted from `automatic_organization_creation: false`)* — Clerk creates the first org during sign-up using the naming rules below; the member never sees an org-creation form. Local rows are created by our `organization.created` / `organizationMembership.created` webhook handlers (§3.9), which mirror — they never provision.
+- **Default naming rules** — personalize from member name (`user.first_name` → `"Kal's Organization"`), with a generic fallback. Org rename stays available in Settings.
 - **2FA / passkeys enabled** at the Clerk level for every app.
 
 ### 3.2 Signup happens on the marketing site, not the admin
@@ -373,16 +406,14 @@ The technical pattern is **embedded Clerk** on the marketing site:
 
 ### 3.3 Smooth org creation (no "create your org" screen)
 
-After Clerk creates the user, an org needs to exist for them to use the app. We avoid showing a "Create your organization" screen by combining `force_organization_selection: false` with two automated paths:
+**Amended in v3.9 — the mechanism is Clerk-native, not app code.** Clerk's **"Create first organization automatically"** toggle (with the §3.1 naming rules) creates the org *during* sign-up: the member never sees a naming form, and the org exists before any redirect. Our side does exactly two things:
 
-- **Primary: `user.created` webhook.** When Clerk creates the user, our API receives the `user.created` webhook (see §3.9), reads any `unsafeMetadata.affiliateCode` set during signup, auto-creates an org named `"<First Name>'s Workspace"`, and writes the `Referral` row if an affiliate code was present. Org exists before the user lands anywhere.
-- **Fallback: admin first-load auto-create.** If the webhook is delayed or fails (Clerk webhook delivery is at-least-once, not strictly real-time), the admin's first-load logic checks for zero memberships and auto-creates the org as a backup. Idempotent — once the webhook lands, this path becomes a no-op.
+- **Mirror, don't provision.** The `organization.created` and `organizationMembership.created` webhooks (§3.9) create the local `Organization` and `User` rows, run affiliate attribution from `unsafeMetadata.affiliateCode`, and apply the OWNER rule below. `user.created` never creates orgs.
+- **First admin becomes OWNER.** Clerk has no OWNER concept — its creator role maps to `org:admin`. When a membership event would create a local user with the generic admin mapping and the org has **no** OWNER, that user is stored as OWNER instead. Without this rule, every Clerk-organic org has nobody holding `org.close`, and the sole-owner-leave guard points at no one.
 
-Either way, by the time the user clicks "Continue to dashboard" from the welcome page, the org exists. No extra screen, no waiting state.
+Why not the previously-prescribed app-side `user.created` provisioning: with "Membership required" ON, Clerk's own signup flow drives org membership synchronously — an async webhook creating a second org *races* it. The platform feature is the entire implementation; the withdrawn admin first-load fallback is unnecessary for the same reason.
 
-Org rename is available later in Settings.
-
-> **Foundry status (v3.6):** neither path is implemented. The `user.created` handler is log-only ("auto-provisioning deferred"), and the admin's first-load logic bails at zero memberships (it only auto-*activates* when exactly one membership exists). Local org rows are created from `organization.created` / `organizationMembership.created` webhooks. **Open question:** confirm in the Clerk dashboard what creates the Clerk org for an organic marketing-site signup today — either Clerk-side automatic org creation is ON (contradicting §3.1's `automatic_organization_creation: false`) or fresh signups land org-less. Verify with a real test signup before building the webhook path.
+> **Foundry status (v3.9): implemented — this section now describes what ships.** Toggle flipped ON in the production instance 2026-08-31; mirror webhooks + first-admin→OWNER live since api v3.66.0. The v3.6 open question ("what creates the Clerk org for an organic signup?") is answered: previously nothing — Clerk's membership-required flow forced a manual org-creation screen; now the auto-create toggle.
 
 ### 3.4 Disposable email blocking
 
@@ -391,6 +422,8 @@ Every app blocks signups from known disposable email providers using the **`disp
 - Reject the signup with a clear error message: **"We don't allow signups with temporary or disposable email addresses. Please use your real email."**
 - Log the attempt to Sentry at `info` severity (per §17 — the disposable email block is a signal, not an error).
 - **CSR override is per-domain**, not per-email — granting `mailinator.com` access opens it for everyone using that domain. UI lives in an admin-only Settings page (`/admin/disposable-overrides` or equivalent). Each override row carries: `domain`, `addedBy` (User.id), `reason`, `createdAt`, optional `expiresAt`. Override creation/removal writes an `auth.disposable_override` entry to the AuditLog (§14.5). This makes overrides explicit, time-bound by default, and auditable — not informal Slack favors.
+
+> **Foundry status (v3.9): override mechanism shipped** (api v3.68.0): `DisposableEmailOverride` table, staff-only `GET/POST/DELETE /staff/disposable-overrides` (dual-gated: `users.manage` + the `FOUNDRY_STAFF_EMAILS` allowlist), audit events on add/remove, expiry honored at read time. Accepted equivalences: the UI lives as a tab on the staff settings page rather than a dedicated route, and attribution is the staff member's **email** rather than `User.id` (the staff gate is email-based). The blocklist check stays a synchronous in-process set; overrides refresh into it on boot, on a 60s timer, and after each mutation — note it's a plain unref'd interval, not a scheduled job, so it works where crons are disabled (Foundry prod runs `RUN_CRONS=false`).
 
 ### 3.5 Local schema mirror
 
@@ -472,16 +505,17 @@ Some fields exist in both Clerk and the local DB (`accountType`, `role`, org mem
 
 **Sync direction is one-way and write-on-change.** When local `role` or `accountType` changes (admin promotes a user, partner application is approved), we write the new value to Clerk metadata in the same transaction. We do **not** poll or sync from Clerk back to local. Treat Clerk metadata as **eventually consistent / advisory** — the frontend may read it for UI hints (`useUser().publicMetadata`), but the API always re-validates against the local DB. Direct edits to Clerk metadata via the dashboard during incidents will get overwritten on the next local update for that user.
 
-**Plus: push on login.** On every successful authenticated request that hits `ClerkGuard`, after the local DB lookup, opportunistically write the current `role` + `accountType` to Clerk metadata if they don't match. This keeps client-side `useUser().publicMetadata` reads accurate. Without it, a fresh signup or a recently-promoted user would have stale Clerk metadata on the client until the next local-DB-triggered write — and the client SDK would render UI off the wrong values. The write is fire-and-forget (no blocking), and only fires on mismatch (no extra write traffic in the steady state — most requests skip it).
+🔴 **No per-request Clerk writes — of any kind** *(v3.9; replaces the withdrawn "push on login" pattern)*. The auth guard must never write to Clerk (or to hot local rows) on the request path. Foundry shipped the milder version of this — a per-request `lastLoginAt` update — and a single page load's ~20 concurrent requests serialized on that one row lock, producing 5–15-second page loads. Write-on-change is the whole sync story; the client tolerates briefly-stale `publicMetadata` because the API never trusts it anyway. If a divergence is noticed during permission re-validation, log at `warn` and reconcile asynchronously (local DB → Clerk), never inline.
 
-> **Rate-limit caution:** the only-on-mismatch pattern keeps steady-state write traffic to Clerk near zero, but the burst pattern after a deploy that touches role logic, after a bulk role change, or during a re-auth storm could hit Clerk's per-instance write quotas. Each app should:
-> - Confirm Clerk's current admin-API rate limits against the app's expected post-login traffic shape (Clerk publishes these per plan).
-> - Add a per-`(clerkUserId, key)` short-TTL cache (e.g., 60s) on the mismatch-write path so a flurry of requests from a single client doesn't fan out to repeated Clerk writes within the same window.
-> - Log Clerk write failures at `warn` and continue serving the request — the local DB stays canonical, and the next mismatch-check will retry.
+### 3.7.1 Guarded role sync from membership events (v3.9)
 
-If a divergence is detected during permission re-validation, log to Sentry at `warn` and reconcile by reading the local DB and writing to Clerk.
+Clerk's membership role is a **2-value projection** (`org:admin` / `org:member`) of an app's role enum, which may hold a dozen values. Mapping it straight onto `User.role` on `organizationMembership.created`/`.updated` destroys information — and it did: a user invited as WAREHOUSE was silently reset to MEMBER when they accepted (invisible in Foundry exactly as long as MEMBER was aliased to ADMIN; real drift the moment it wasn't). The rule:
 
-> **Foundry status (v3.6): the per-request push is not implemented — and Foundry's production history argues against it.** Per-request writes in the guard (the `lastLoginAt` update) serialized on a single row lock under a page load's ~20 concurrent requests and caused 5–15-second page loads; the fix throttles guard writes to 5-minute staleness behind a 30-second single-flight auth cache. Clerk metadata is written only on explicit `accountType`/role changes (write-on-change per this section's first half, which Foundry does follow). **Recommendation for the next revision:** drop the "push on login" paragraph and standardize the write-on-change-only pattern; the client can tolerate briefly stale `publicMetadata` because the API never trusts it anyway.
+- A membership event may move a user **only within the generic pair**: local MEMBER → ADMIN on `org:admin`, local ADMIN → MEMBER on `org:member`.
+- **OWNER and every app-specific role are local decisions the event must never touch** (consistent with "local DB is canonical for role").
+- **Creation path OWNER rule:** when the event *creates* a local user with the generic admin mapping and the org has no OWNER, store OWNER instead (§3.3).
+
+> **Foundry status (v3.9):** implemented in api v3.66.0 (`guardedRoleSync` in the Clerk webhook service), with the invite-clobber bug it fixes covered by the §4 contract spec.
 
 ### 3.8 Org switcher (header dropdown)
 
@@ -517,18 +551,22 @@ const evt = wh.verify(rawBody, headers) as ClerkWebhookEvent;  // throws on inva
 
 | Event | What to do |
 |---|---|
-| `user.created` | **Auto-provision the user's first org.** Read `unsafeMetadata.affiliateCode` if present (set by the marketing-site signup form per §6), create an `Organization` named `"<First Name>'s Workspace"`, create the local `User` row with `role: OWNER`, add Clerk org membership, and write a `Referral` row if an affiliate code was passed. This is the primary path for org provisioning; the admin first-load fallback (§3.3) handles delayed/failed webhook delivery. |
+| `user.created` | **Mirror-only** *(v3.9 — provisioning withdrawn; Clerk auto-creates the org, §3.3)*. Run the disposable-email signal (§3.4) and any bookkeeping. Do **not** create orgs here — it races Clerk's own signup flow. Affiliate attribution runs on `organizationMembership.created` (below), where the org exists. |
 | `user.deleted` | Tombstone the local `User` row(s) for this `clerkUserId` so they can't be recreated on next login attempt. Tombstone in the §15.2 sense — null PII, set `deletedAt`, keep the row for FK integrity. |
 | `organization.deleted` | Cascade-close the local `Organization` row matching `clerkOrgId`. Same flow as `DELETE /orgs/me`. |
 | `user.updated` | Propagate email/name changes to local `User` rows (across all orgs the user belongs to). Critical when the user changes their email in their account-tab UI. |
 | `session.created` | Drives the `auth.new_device_login` audit event (§14.5) when the IP / user-agent doesn't match the user's recent sessions. |
-| `organizationMembership.created` / `.deleted` | Sync local `User` rows with Clerk org membership (lazy-create on `created`, tombstone or remove on `deleted`). Defends against memberships changed via Clerk dashboard. |
+| `organizationMembership.created` / `.deleted` | Sync local `User` rows with Clerk org membership (lazy-create on `created`, tombstone or remove on `deleted`). Defends against memberships changed via Clerk dashboard. **Role writes follow the §3.7.1 guarded sync** (generic ADMIN↔MEMBER pair only; first-admin→OWNER on create). On `created`, run affiliate attribution from `unsafeMetadata.affiliateCode` and clear the consumed code from Clerk. |
 
 **Endpoint pattern:** `POST /webhooks/clerk` (per-app, public — secured by signature verification, not auth). Handler must be idempotent — Clerk retries on non-2xx, and webhook at-least-once delivery means a user might see the same `user.deleted` event twice.
 
-**Failure handling:** if the webhook can't process (database down, Clerk API rate limit during cleanup), return 5xx so Clerk retries. Log to Sentry at `error`.
+**Failure handling (v3.9 — a taxonomy, because both extremes shipped and both were wrong):**
 
-> **Foundry status (v3.6):** the handler exists with svix verification and covers 12 event types (including `organization.created`/`.updated`, `organizationMembership.updated`, and `session.removed`/`.revoked` beyond this table). Deltas from the table: `user.created` does **not** auto-provision (log-only stub — §3.3); affiliate attribution runs on `organizationMembership.created` instead, and clears the consumed code from Clerk `unsafeMetadata` (a nice touch worth standardizing); `session.created` writes a plain `auth.login` audit event (no new-device detection yet); and processing errors are **swallowed and 200'd** to prevent Clerk retry storms — the direct opposite of the failure-handling rule above. That last one needs a decision: idempotent handlers + 5xx-retry per the standard, or amend the standard to accept ack-and-log with Sentry as the safety net.
+- **Unresolvable events** — unknown org, no matching rows, a payload referencing state we never had — are handled *inside* the handler: log-and-return, so the endpoint still 200s. Retrying these can never succeed; 5xx-ing them produces retry storms and a permanently red webhook dashboard.
+- **Transient failures** — database down, provider API error — propagate out as **5xx so Clerk retries**. Handlers must be idempotent (at-least-once delivery). Log to Sentry at `error`.
+- The banned third option is ack-and-log-everything: swallowing processing errors behind a 200 hides real failures behind healthy logs (§21 principle 16). Foundry ran this way for months.
+
+> **Foundry status (v3.9):** compliant. Svix-verified handler covers 12 event types; `user.created` is mirror-only per the amended table; attribution runs on `organizationMembership.created` and clears the consumed code (now the standard); role writes use the §3.7.1 guarded sync; processing errors follow the v3.9 taxonomy (transient → 5xx as of api v3.67.0; unresolvable events log-and-return inside handlers). Remaining delta: `session.created` writes a plain `auth.login` audit event — no new-device detection yet.
 
 ### 3.10 Org lifecycle endpoints
 
@@ -590,12 +628,16 @@ Default role-to-permission mapping (apps may extend, must not contract):
 
 - **OWNER** — all permissions including `org.close` and `affiliate.manage`
 - **ADMIN** — all except `org.close` (includes `affiliate.manage`)
-- **MEMBER** — `settings.read`, `support.read`, `support.write`, `affiliate.read`, `activity.read`, `notifications.manage`
-- **VIEWER** — `settings.read`, `support.read`, `affiliate.read`, `activity.read`, `notifications.manage`
+- **MEMBER** — **standard operational access** *(v3.9 — redefined; the old near-empty baseline was unusable, so every app would have extended it divergently)*: the universal baseline (`settings.read`, `support.read`, `support.write`, `affiliate.read`, `activity.read`, `notifications.manage`) **plus full day-to-day read/write across the app's domain permissions** (in Foundry: products, variants, orders, POs, invoices-without-approve, shipments, stock, reports), and **zero org administration** — never `users.manage`, `apikeys.manage`, `webhooks.manage`, `apps.manage`, `org.manage`, `settings.write`, `audit.read`, `export.run`, `affiliate.manage`, or approval-tier permissions.
+- **VIEWER** — `settings.read`, `support.read`, `affiliate.read`, `activity.read`, `notifications.manage`, plus read-only domain permissions. Strictly no writes — including `support.write`.
+
+**Migration rule for apps that aliased MEMBER to ADMIN** (Foundry did, "for backward compatibility"): promote every existing MEMBER row to ADMIN in the same change that tightens the mapping. Nobody's access changes — the label becomes truthful — and new "Member" invites get the correctly-scoped role. Never silently strip permissions from live users.
+
+**Pin the mapping with a contract test** that asserts the *denials* (MEMBER lacks `users.manage`, VIEWER lacks every write, unknown permission → false for every role). An allow-only test can't catch a role quietly aliased to a bigger set — which is precisely how MEMBER≡ADMIN survived unnoticed.
 
 > **Note on VIEWER + `affiliate.read`:** Every org has a single affiliate code (§6). VIEWER can see their org's code and commission stats but cannot manage settings. This makes the affiliate program viewable to all org members regardless of role.
 
-> **Foundry status (v3.6):** all 13 baseline permissions exist and the guard fails closed (a route with no `@RequirePermission` throws unless explicitly `@NoPermission()` — worth adopting portfolio-wide). Divergences: **MEMBER is aliased to the full ADMIN permission set** ("backward compat"), contradicting the mapping above; `BASELINE_FOR_ALL` grants every role — including VIEWER — `support.write`; the enum has 11 roles (legitimate app-specific extension); and `notifications.manage` is defined but never checked by any admin surface. The MEMBER≡ADMIN aliasing undermines "roles mean the same thing across the portfolio" and needs either a deliberate re-mapping in Foundry or a standard change.
+> **Foundry status (v3.9): compliant** (api v3.66.0+). MEMBER carries the operational mapping above (existing MEMBERs promoted to ADMIN per the migration rule); VIEWER lost `support.write`; the §4 contract is pinned by `permissions.spec.ts` with denial assertions; class-level `@Public()` is eliminated and CI-enforced (`public-decorator-hygiene.spec.ts`); denial tests exist for ClerkGuard, PermissionGuard, StorefrontAuthGuard, and the feature-toggle guard. The permission guard fails closed (no `@RequirePermission` ⇒ denied unless `@NoPermission()`) — adopt portfolio-wide. Remaining minor delta: `notifications.manage` is granted but not yet checked by an admin surface (§11's schema migration comes first).
 
 ### Permission gating
 
@@ -622,10 +664,10 @@ Two ways to end up with a guard that returns "allow" forever while looking corre
 
 Guards conventionally start `if (isPublic) return true`. Put `@Public()` on a class and it short-circuits **all** of them — `@RequirePermission()`, `@RequirePartner()`, tenancy — for every route on that controller. Identity then comes from whatever headers the caller sends, which makes it spoofable.
 
-- `@Public()` is **route-level only**. Never class-level.
+- `@Public()` is **route-level only**. Never class-level. Make the guards enforce it: read the public flag from the route handler *only*, so a class-level `@Public()` doesn't fail open — it fails **closed** (every route 401s), which is discoverable in the first minute.
 - A controller with genuinely public routes marks those routes, not the class.
-- If a class-level escape is needed for tenancy specifically, use a narrow decorator that *only* skips tenancy (`@SkipTenancy()`), never the blanket public flag.
-- Audit for this directly: grep for `@Public()` immediately preceding `export class`.
+- A controller whose auth is its **own guard stack** (e.g. storefront-key routes) uses a narrow opt-out decorator (`@SkipSessionAuth()`-style) that is honored by *named* guards only — and it MUST ship paired with the replacement auth guard on the same class.
+- **(v3.9) "Audit for it" is not the control — a CI spec is.** Ship a source-scan test that fails the build on (a) any class-level `@Public()` and (b) any `@SkipSessionAuth()` controller missing its replacement guard. The one-time grep is how the hazard shipped in the first place; Foundry's `public-decorator-hygiene.spec.ts` is the reference. This is §25's default-deny philosophy applied to guards: wherever this document says "audit for X," prefer "a test fails on X."
 
 **2. Guard registration order and location decide whether a guard runs at all.**
 
@@ -684,7 +726,7 @@ Why this has to be an org column rather than derived on the fly:
 
 ---
 
-## 16. Session Permission Re-Validation 🚧
+## 16. Session Permission Re-Validation ✅
 
 **Every authenticated request re-validates the user's role and org membership against the local DB.** Sessions do NOT cache permissions until token expiry.
 
@@ -707,11 +749,15 @@ A 5–30 second cache TTL is acceptable for most apps and reduces DB load. Secur
 
 ### Frontend handling
 
-When the API returns a 401 with code `permission_changed`:
-- Clear local auth state
-- Redirect to `/login` with a flash message: "Your permissions have changed. Please sign in again."
+**Amended in v3.9.** When the API returns a 401 with code `permission_changed`, the client must stop operating on stale permissions — that's the requirement. The old prescription ("redirect to `/login`") is wrong under Clerk: the session is still valid, so /login bounces straight back in. Instead:
 
-> **Foundry status (v3.6):** role is re-read from the local DB behind a **30-second single-flight cache** (top of the allowed 5–30s band; the cache was added as part of the guard-performance fix — see §3.6). Still no `permission_changed` 401 anywhere in api or admin — demotion currently surfaces as a plain 403 from the permission guard. Audit item remains open.
+- Flag the event (e.g. sessionStorage) and **hard-reload** so every rendered surface re-derives under the new role.
+- On boot, surface the flag as a notice: "Your permissions have changed."
+- Never silently retry the failed request — it would succeed under the new role while the whole rendered UI still reflects the old one.
+
+**Server-side shape:** track the last role served per `(user, org)`; on change, record the *new* role first, then fail exactly once with the coded 401 — the retry proceeds under the new permissions. A per-process map is acceptable: each instance fails once independently, and detection latency is bounded by the auth-cache TTL.
+
+> **Foundry status (v3.9): implemented** (api v3.67.0 + admin). Role re-read behind the 30-second single-flight cache; `PermissionChangedException` carries the machine-readable code; admin reloads + toasts. Status flips 🚧 → ✅.
 
 ---
 
@@ -984,6 +1030,13 @@ model PartnerSeatAssignment {
 - **Partner referral credit is independent of partner seat status.** If Agency A referred Client X but the client later replaces them with Agency B, Agency A *still* receives the referral commission. This is intentional — the original partner did the originating work. The deliberately modest 10% commission rate plus the "action is proof" requirement (you must physically create the trial) makes this self-balancing: bad actors can't easily farm signups because each one requires real client engagement to convert.
 - **Partner orgs decide which of their team members access which client seats** via `PartnerSeatAssignment`. The partner org's Partner Dashboard manages this.
 
+**Assignment enforcement semantics (v3.9 — previously unspecified):** the partner org carries an **`autoAssignAll`** default (on `PartnerProfile`, default **true**).
+
+- `autoAssignAll: true` — every partner-org member may act on every client seat; `PartnerSeatAssignment` rows are *advisory* (they record intent and drive the dashboard, nothing blocks).
+- `autoAssignAll: false` — the assignment rows ARE the access list; an unassigned member is denied at org-resolution time when acting through the seat.
+- Default true preserves behavior for orgs that predate the field; flipping to false is the org's explicit opt-in to enforcement.
+- Assignment add/remove is idempotent and audit-logged **on the client org** (`partner_seat.assignment_added` / `.assignment_removed`) — the client's audit trail must show who could reach their account.
+
 ### Permissions on partner seats
 
 When a client adds a partner seat, the **client decides** what permissions that seat grants. Standardized options:
@@ -1193,7 +1246,7 @@ The portfolio has exactly **three** compensation shapes. Every referred org is o
 
 ### API surface
 
-> **Foundry status (v3.6):** live today — `GET /partner/me/capabilities` (in place of `profile`), `GET /partner/me/referrals`, `GET /partner/me/seats`, `POST /partner/seats/:id/leave`, `POST /partner/trials`, the applications set (`POST /partner/applications` public, `/from-trial`, `/mine`, list, `:id/approve`, `:id/reject`), `POST /partner/clients/link-existing`, and the client-side `/orgs/me/partner-seats` GET/PATCH/DELETE. Still unbuilt: profile/payout, commissions, and team-assignment endpoints — no longer blocked on billing, simply not built. Evident has the commissions and dashboard endpoints live. The marketing site's `/partners/apply` currently has no form — it routes into signup + the in-app application.
+> **Foundry status (v3.9):** the full non-billing surface is live (api v3.67.0+) — everything from the v3.6 list **plus** `GET/PUT /partner/me/profile` (payout settings; payout-email changes audit-logged as `partner.payout_email_changed`), `GET /partner/me/team`, `PUT /partner/me/team/defaults` (`autoAssignAll`), and `POST/DELETE /partner/seats/:id/assignments[/:userId]`, with Team + Settings tabs on the partner dashboard. Payout fields are reporting targets only (payout rails unbuilt portfolio-wide — v3.7 rule). Assignment *enforcement* when `autoAssignAll=false` is not yet wired at access time — deferred to the billing-phase access work; the data model, management API, and audit trail are what ship today. Still ⏸️ billing: commissions endpoints (Evident has them). The marketing site's `/partners/apply` routes into signup + the in-app application (no standalone form).
 
 ```
 GET    /partner/me/profile                  → partner profile + payout settings
@@ -1814,11 +1867,11 @@ model WebhookDelivery {
 ```
 POST <customer_url>
 Content-Type: application/json
-X-Epic-App: <app_name>           // foundry-ims, dispatch, rally, etc. — disambiguates if customer integrates with multiple Epic apps
-X-Epic-Event: <event_type>
-X-Epic-Delivery-Id: <delivery_uuid>
-X-Epic-Signature: t=<timestamp>,v1=<hmac_sha256_hex>
-X-Epic-Timestamp: <unix_seconds>
+x-<app>-event: <event_type>              // v3.9 ruling: per-APP prefix (x-foundry-*, x-dispatch-*, …).
+x-<app>-delivery-id: <delivery_uuid>     // Customers integrate with the app's brand; the portfolio is an
+x-<app>-signature: t=<timestamp>,v1=<hmac_sha256_hex>  // internal fact. The old X-Epic-* spelling is withdrawn.
+x-<app>-timestamp: <unix_seconds>
+X-Epic-App: <app_name>                   // optional disambiguator for customers integrating with several Epic apps
 
 { "id": "...", "type": "...", "data": {...} }
 ```
@@ -1932,7 +1985,9 @@ model ApiKey {
 - **Optional expiration** — keys can have `expiresAt` set on creation. Past-expiry keys reject auth.
 - **"Older than 90 days" view** — Settings page surfaces stale keys with a rotation prompt.
 - **Rotation reminders** — automated notification at 90-day mark for keys without expiration.
-- **`scopes` field reserved** — full granular scope implementation is a future feature; field is in schema now to avoid migration later.
+- **Per-key scopes override role** *(v3.9 — no longer reserved; live in Foundry)*: when `scopes` is empty the key derives its permissions from `role` (original behavior, every old key unchanged); when non-empty, the scopes ARE the key's exact permission set and `role` is ignored. Lets an org mint a least-privilege key (products-only, read-only) without inventing a role.
+- **Grantable scopes** *(v3.9)*: a user may only grant a new key scopes **their own role holds**, intersected with the assignable set — nobody mints a key more powerful than themselves, and OWNER-only powers (`org.close`, restore-class permissions) are never assignable to any key.
+- **Key types** *(v3.9)*: keys carry a `keyType` when an app exposes more than one API surface. The reference case is Foundry's `ADMIN` vs `STOREFRONT`: storefront keys use a distinct prefix (`fims_sf_`), bind to exactly one resource (a channel), authenticate only the public storefront surface, and are **rejected by the admin guard outright** — a surface-scoped key must never pass the richer surface's auth, and vice versa. Each type gets its own creation endpoint so the binding is impossible to omit.
 
 ### Generation
 
@@ -1991,7 +2046,7 @@ model ActivityLog {
 
 Treat `source` as a closed enum for queryability; if an app needs a new source, add it to the standard list, not as a one-off string.
 
-> **Foundry status (v3.6):** the email→userId migration happened, but to a different shape than specified. There is no `createdBy` field — the actor is `userId` + `userEmail` + `actorType` (enum `MANUAL | SYSTEM | API_KEY | WEBHOOK | UNKNOWN`), stamped from ambient AsyncLocalStorage context; pre-migration rows read `UNKNOWN` (deliberately not `SYSTEM`, so old rows make no false claims). **`userEmail` is deliberately denormalized** so history stays readable after a user leaves — which conflicts with principle 11 ("logs reference user IDs, not emails") and this section's own `createdBy` comment. Decision needed: either bless the denormalized-email-snapshot pattern here (and require the §15.2 deletion job to scrub `ActivityLog.userEmail`), or drop the column. There's also no `partnerSeatId` on either log yet, and Foundry's live `source` values (`promote`, `gtin_match`, `csv_import`, `api`, `webhook`) don't come from the closed list above.
+> **Foundry status (v3.9):** the email→userId migration happened to a richer shape than specified, and **v3.9 blesses it as the standard**: actor = `userId` + `userEmail` + `actorType` (enum `MANUAL | SYSTEM | API_KEY | WEBHOOK | UNKNOWN`), stamped from ambient AsyncLocalStorage context; pre-migration rows read `UNKNOWN` (deliberately not `SYSTEM`, so old rows make no false claims). **The denormalized `userEmail` snapshot is accepted** — history stays readable after a user leaves — with a hard condition: **the §15.2 deletion job MUST scrub the snapshots** (still an open checklist verification for Foundry). Principle 11 gains this as its one exception: IDs in *log lines*, snapshot-with-scrub in *audit/activity records*. Remaining deltas: no `partnerSeatId` on either log yet, and Foundry's live `source` values (`promote`, `gtin_match`, `csv_import`, `api`, `webhook`) don't come from the closed list above.
 
 ### Source field and partner attribution
 
@@ -2028,6 +2083,8 @@ await this.activityLog.log(orgId, {
 A separate log for **security-sensitive events**, distinct from the business activity log. Compliance teams will query this directly.
 
 > **Foundry status (v3.6):** shipped — `AuditLog` model (deliberately relation-free so rows survive org/user deletion) and the `/audit` admin page gated on `audit.read`. `auth.login` / `auth.logout` write from the Clerk session webhooks. Remaining baseline events below are instrumented incrementally; `partnerSeatId` not yet added. 7-year cold storage still open (checklist).
+
+**Platform-level events (v3.9):** the audit log is org-scoped, but some staff actions are global — a disposable-email override (§3.4) affects every org. Convention: log the event **to the acting staff member's own org**, with a self-describing `resource` (e.g. `disposable_override:<id>`) and the operation in `metadata`. Do not invent a second, org-less audit store for a handful of platform events; do not skip logging them either.
 
 ### Why separate?
 
@@ -2710,6 +2767,58 @@ The manual obligation stands, and is now narrower and more specific than "review
 
 ---
 
+## 26. Agent Access (MCP) ✅ Foundry · 📋 elsewhere (v3.9)
+
+Customers increasingly reach apps through AI agents — Claude, ChatGPT, n8n flows, custom assistants — and the integration surface they expect is an **MCP server**. Foundry has run one in production since 2026-07 (listed in Anthropic's directory, the official MCP Registry, Smithery, LobeHub; submitted to OpenAI's app directory) and the pattern below is what survived contact. Every app should assume this ask is coming; new apps should reserve the architecture even if they don't build it at launch.
+
+### Topology
+
+- The MCP server is a **separate edge service** (Foundry: a Cloudflare Worker at `mcp.<rootdomain>`), not routes on the API. It translates MCP tool calls into ordinary authenticated API calls — the API stays the single enforcement point for auth, tenancy, and rate limits.
+- Tools are **task-shaped, not endpoint-shaped**: `search_products`, `set_bom`, `bom_can_build` — a curated verb set with real descriptions, not a generated mirror of the REST surface.
+- Destructive tools state their blast radius in the description and, where the host supports it, require confirmation.
+
+### Identity: per-user, org-pinned credentials
+
+The server must act as **a specific user in a specific org** — never as an app-wide service account:
+
+- **First-party OAuth** on the app's own domain: the agent platform starts an OAuth flow, the user consents on our page, and the exchange mints a **per-user, org-pinned API key** scoped like any other key (§13). Secretless public clients via PKCE.
+- **RFC 7591 dynamic client registration** — agent platforms register their clients programmatically; do not hand-maintain a client list.
+- Tenancy comes from the key's org pinning, so a hijacked or confused agent can never reach across orgs. Org switching, where offered, is an explicit tool that re-validates membership server-side.
+
+### Operational lessons (each cost an incident or a debugging day)
+
+- **Token refresh races**: two concurrent tool calls refreshing the same token must coalesce — one wins, the other reuses the result. Rotating refresh tokens without this locks the grant out entirely.
+- **Hosted agent platforms may open a NEW session per tool call.** No warm caches, no sticky sessions; every call must be independently cheap and independently authenticated.
+- **Legacy grants drain slowly**: when the auth model changes, old connections keep working until each user reconnects. Version the grant, monitor both paths, and never force-revoke without messaging.
+- **Monitor like a product surface**: error tracking on the worker, a periodic canary that exercises a real tool call, and usage metrics per tool.
+- Directory listings are marketing surfaces with review processes — keep the registry keys/credentials safe (a registry listing is DNS-pinned), and expect reviewer accounts to need a constrained demo org.
+
+---
+
+## 27. Public API Documentation ✅ Foundry · 📋 elsewhere (v3.9)
+
+If customers or partners can hold an API key (§13), the API's public documentation is a product surface with a correctness bar, not a build artifact. The contract, distilled from Foundry's 2026-08 full audit (241 operations, 100% described):
+
+### The docs are generated, the *scope* is declared
+
+- Docs regenerate from code on every deploy — never hand-maintained.
+- Each public doc (partner API, storefront API, …) is built from an **explicit module allow-list**, commented at the definition site with "review every controller in a module before adding it." The full internal/admin spec is never exposed in production.
+- Maintenance, debug, and staff endpoints are **excluded by annotation** (`@ApiExcludeEndpoint` or equivalent) even inside allow-listed modules. Absence of a docs entry is not security — those routes keep their guards — but advertised internals become support tickets and probe targets.
+
+### Completeness bar (auditable, so audit it)
+
+- **Every operation** has a one-line summary written for an integrator, not a restatement of the method name.
+- **Every schema property** has a description. 100%, not "mostly" — the audit query is `properties without description == 0`, which makes the bar mechanically checkable in CI or a periodic sweep.
+- Auth requirements, pagination style, and error shapes are documented once, centrally, and linked — not re-explained per endpoint.
+
+### Toolchain traps (each silently produced wrong docs)
+
+- **Doc-comment dialect matters**: the Swagger CLI plugin reads `/** */` only — `///` comments compile fine and never reach the spec. One character, zero docs.
+- **A TypeScript `interface` used as a request body is invisible** to the doc generator. Converting it to a class changes runtime validation behavior (whitelist pipes start stripping), so the conversion is a deliberate change with validators added — not a mechanical rename.
+- **Dead fields in DTOs ship as documented API.** A field the server ignores is a lie with a schema; delete it from the DTO, don't describe it.
+
+---
+
 # Part VIII — Web Presence & Marketing
 
 ## 18. Marketing Site Contract
@@ -2776,7 +2885,7 @@ The welcome page also:
 - Presents a **"Continue to Dashboard"** primary CTA → `app.<rootdomain>`. Clerk session is already live (cross-subdomain), so the user lands directly in the dashboard.
 - **Is `noindex`** (v3.6) — `/welcome` (and `/signup`) should carry a noindex meta and stay out of the sitemap; conversion pages aren't crawl targets.
 
-> **Foundry status (v3.6):** `/welcome` is live with GTM/GA4 + Meta + LinkedIn wired (env-gated) and clears the cookie; TikTok/Reddit not wired (fine — no ads on those channels). Two gaps: GTM currently loads **only on `/welcome`**, not site-wide as recommended above, and both `/welcome` and `/signup` are indexable + in the sitemap (the new noindex rule).
+> **Foundry status (v3.9):** `/welcome` is live with GTM/GA4 + Meta + LinkedIn wired (env-gated) and clears the cookie; TikTok/Reddit not wired (fine — no ads on those channels). **The noindex rule is now met**: both `/signup` and `/welcome` carry `noindex, nofollow` and are excluded from the sitemap (astro-foundryims#61, live 2026-08-31). Remaining gap: GTM loads **only on `/welcome`**, not site-wide as recommended above.
 
 ### 18.4 Cookie consent
 
