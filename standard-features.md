@@ -311,21 +311,21 @@ The exceptions are **shared libraries** (e.g., `@epic/disposable-emails`, `@epic
 | Notification center (in-app bell + dropdown) | ✅ | Bell icon (unread dot, no count), dropdown of recent 20. No full-history page yet. |
 | Notification preferences (per-method) | 🚧 | Foundry has per-category on/off only, and its `Notification` rows are org-scoped with no `userId` — the §11 baseline needs a schema migration, not an extension. |
 | Notification transactional tier | 📋 | `deliveryClass: "user_pref" \| "transactional"`. Not implemented anywhere. |
-| Outbound webhooks | ✅ | Shipped in Foundry: `WebhookEndpoint`/`WebhookDelivery`, management API + rotate + replay, every-minute worker, 8-attempt backoff, auto-disable. Contract deltas in §12 Foundry status (headers, no DLQ state, no usage metrics). |
+| Outbound webhooks | ✅ | Shipped in Foundry: `WebhookEndpoint`/`WebhookDelivery`, management API + rotate + replay, every-minute worker, 8-attempt backoff, auto-disable. 2026-08-31 (api v3.71.0): delivery claim made atomic (the read-then-update race is fixed) and the §12 warnings shipped — in-app notification at 3 consecutive failures + on auto-disable. Remaining deltas: no dual-signing rotation window on customer endpoints (exists in storefront webhooks, port it), no usage metrics, no `dead_letter` state name. |
 | Activity log | ✅ | Per-org change history with entity-type/id pivot. Actor = `userId`/`userEmail`/`actorType` via AsyncLocalStorage — see §14 Foundry status. |
 | Security audit log | ✅ | `AuditLog` model + `/audit` page live in Foundry; `auth.login`/`auth.logout` written from Clerk session webhooks. Remaining baseline events instrumented incrementally. |
-| API keys | ✅ | `<prefix>_*` prefixed keys, role- or scope-gated, hashed in DB. Foundry adds `keyType` (ADMIN \| STOREFRONT) + channel binding; `expiresAt` supported by API but not exposed in the create UI. |
+| API keys | ✅ | `<prefix>_*` prefixed keys, role- or scope-gated, hashed in DB. Foundry adds `keyType` (ADMIN \| STOREFRONT) + channel binding; `expiresAt` settable from the create UI since 2026-08-31 (admin#480: Never/30/90/180/365 days). |
 | Data export | ✅ | `GET /orgs/me/export` returns a ZIP of CSVs. |
 | Right to deletion (GDPR/CCPA) | ✅ | Shipped in Foundry: 30-day grace + 24h immediate path, Clerk-delete-first tombstone, HMAC email audit. Shape differs from spec (state on `User`; no `DataDeletionRequest` model) — see §15.2 Foundry status. |
 | Users & roles (RBAC) | ✅ | Invite via Clerk, local role assignment, permission decorators. Foundry's mapping now matches §4 (MEMBER operational re-map shipped 2026-08-31, existing MEMBERs promoted to ADMIN); contract pinned by a denial-asserting spec. |
 | Session permission re-validation | ✅ | Foundry: role re-read behind a 30s single-flight cache; role change fails once with the coded 401; admin reloads + explains. (§16, amended handling.) |
-| Sentry observability | 🚧 | Foundry has Sentry init + global filter. No `beforeSend`/PII redaction shipped; `@epic/sentry-config` does not exist yet; release var still `SENTRY_RELEASE`. |
+| Sentry observability | 🚧 | Foundry has Sentry init + global filter. No `beforeSend`/PII redaction shipped; `@epic/sentry-config` does not exist yet. Release fixed 2026-08-31 (api v3.71.0): `APP_VERSION` env with a package.json fallback — nothing had ever set `SENTRY_RELEASE`, so prod events carried no release at all. |
 | Rate limiting | 🚧 | Foundry runs a custom in-memory fixed-window limiter (per ECS task): 300/min per ADMIN API key + per-endpoint storefront limits, with `X-RateLimit-*`/`Retry-After` headers. No Redis, no per-IP signup limit, no usage endpoints — see §22 Foundry status. |
-| Health checks | 🚧 | Foundry has `/health` but not the standardized shape: no `checks` object, DB failure returns 200 "degraded" rather than 503 — see §17.5 Foundry status. |
+| Health checks | ✅ Foundry | Standard shape shipped 2026-08-31 (api v3.71.0): `checks` object + **503 on DB failure** (LB rotation). Informational sub-checks are config-presence, deliberately not per-probe network calls — the LB hits `/health` every few seconds. |
 | Cron conventions | 🚧 | 26 jobs live via `@nestjs/schedule`; no advisory locks / Redis SETNX anywhere — single-task-safe only. See §17.5 Foundry status. |
 | Plan entitlement gate | 🚧 | §24. Live and correct in Evident; **the 403 has no UI anywhere** so it currently renders as a generic error. Gate was a silent no-op for months before that. |
 | Tenant feature toggles | ✅ Evident | Per-tenant on/off, modelled separately from plan entitlement (§24.1); nav hides disabled groups. |
-| Tenancy: default-deny data layer | 🧭 | §25. **Not built anywhere.** Supersedes PR review as the mechanism — that mechanism let the same bug through three times in one app. |
+| Tenancy: default-deny data layer | ✅ Foundry (burn-in) · 🧭 elsewhere | §25 shipped in Foundry 2026-08-31 (api v3.70.0): Prisma query extension + exhaustive model registry (CI-enforced), `withoutTenantScope(reason, fn)` hatch, raw SQL excluded in writing. Two tiers: predicate-addressed queries hard-fail; id-addressed (verify-then-act) report to Sentry until `TENANCY_GUARD_STRICT`. Prod starts in report mode; flip to enforce after a quiet week. See §25 Foundry status. |
 | Background-worker test harness | 📋 | §17.5. Required where a job can revoke access, delete data, or move money. Evident's worker has **no jest config and no test script**; the trial-expiry cron lives there. |
 | Custom fields | ✅ | Per-entity custom field defs + values. |
 | Agent access (MCP) | ✅ Foundry · 📋 elsewhere | §26: edge MCP server, per-user org-pinned keys, first-party OAuth + RFC 7591 DCR, directory listings. In production since 2026-07. |
@@ -345,7 +345,7 @@ Statuses synced to the shipped repos 2026-08-31 (api v3.69.0).
 - [ ] Add per-method notification preferences (bell/toast/email per category) + `deliveryClass` field per §11 — note this now requires migrating `Notification` to per-user rows first (§11 Foundry status)
 - [ ] Migrate transactional emails to `react-email` (current PO send/follow-up are inline HTML strings) per §9
 - [ ] Adopt `@epic/sentry-config` with PII redaction per §17 *(library itself not yet created)*
-- [ ] Rename `SENTRY_RELEASE` env var to `APP_VERSION` per §17 *(`APP_VERSION` currently exists only as a hand-maintained constant in `health.controller.ts`)*
+- [x] Rename `SENTRY_RELEASE` env var to `APP_VERSION` per §17 *(done 2026-08-31, api v3.71.0 — `APP_VERSION` env wins, package.json fallback; `SENTRY_RELEASE` had never actually been set anywhere)*
 - [x] Implement smooth-signup auto-create-org flow per §3.3 *(resolved 2026-08-31 the v3.9 way: Clerk's "Create first organization automatically" toggle flipped ON — no app code; the previously-prescribed webhook path is withdrawn)*
 - [x] **Move signup form from `app.foundryims.com/signup` to `foundryims.com/signup`** per §3.2 *(done — `@clerk/astro` embedded `<SignUp />` with cookie→`unsafeMetadata` wiring; admin `/signup` retained as fallback)*
 - [x] Build `foundryims.com/welcome` thank-you page per §18.3 *(done — GTM/GA4 + Meta + LinkedIn wired, env-gated; TikTok/Reddit not wired; noindex + sitemap exclusion live 2026-08-31)*
@@ -360,7 +360,7 @@ Statuses synced to the shipped repos 2026-08-31 (api v3.69.0).
 - [x] **New (v3.7):** add the `BillingEvent` idempotency table per §23 *(done 2026-08-31, api v3.69.0 — first app to have one; Evident still lacks it)*
 - [ ] **New (v3.8):** implement the plan entitlement gate per §24, with the §24.3 live-account audit run **before** activation and the §24.4 upgrade prompt shipped **first**
 - [ ] **New (v3.8):** separate plan entitlement from tenant feature toggles per §24.1 if they currently share a field
-- [ ] **New (v3.8):** build the default-deny tenancy layer per §25 *(supersedes the long-open `@epic/eslint-plugin-tenancy` item — the lint rule is now a secondary signal, not the control)*
+- [x] **New (v3.8):** build the default-deny tenancy layer per §25 *(done 2026-08-31, api v3.70.0/v3.71.0 — see §25 Foundry status; prod in report-mode burn-in, enforce-flip pending a quiet Sentry week)*
 - [ ] **New (v3.8):** give the worker/scheduler service a test harness and cover every access-revoking or money-moving job, **including its skip cases**, per §17.5
 - [ ] Build backup runbook documenting 30-day expiry + deletion-rerun-on-restore per §15.2
 - [ ] Set up 7-year audit-log cold-storage infrastructure per §14.5
@@ -369,8 +369,8 @@ Statuses synced to the shipped repos 2026-08-31 (api v3.69.0).
 - [ ] **Schema audit deliverable:** produce a diff document comparing Foundry's `prisma/schema.prisma` against the baseline schemas in §3.5 (Org/User), §6 (Referral), §7 (PartnerSeat / PartnerSeatAssignment), §11 (Notification with `audience` + `deliveryClass`, NotificationPreference per-method), §12 (Webhook + WebhookDelivery with secret rotation fields), §13 (ApiKey with `expiresAt` + `scopes`), §14 (ActivityLog with `partnerSeatId` + standard `source` values), §14.5 (AuditLog with `partnerSeatId`), §15.2 (DataDeletionRequest, DataDeletionAudit). One doc, one PR, ratified *(the 2026-08-23 drift report is a working input, not the ratified deliverable)*
 - [x] Drop `User.affiliateCode` column once per-org migration completes *(done — same migration as the per-org move)*
 - [x] **New (v3.6):** reserve the billing schema per §23 — `Organization.trialEndsAt`, `Organization.status`, `Organization.throttleCustomerId`, `BillingEvent` table *(done 2026-08-31, api v3.69.0; existing orgs backfilled `status='active'`, nothing gates on it yet pending §24.3)*
-- [ ] **New (v3.6):** decide + implement cookie consent per §18.4 *(nothing shipped; Ahrefs analytics currently loads unconditionally)*
-- [ ] **New (v3.6):** verify account deletion scrubs `ActivityLog.userEmail` (and any other denormalized email snapshots) per §14/§15.2
+- [x] **New (v3.6):** decide + implement cookie consent per §18.4 *(done 2026-08-31, site#62 — banner live; marketing pixels + affiliate cookie opt-in; Ahrefs stays ungated as cookieless, disclosed in the banner)*
+- [x] **New (v3.6):** verify account deletion scrubs `ActivityLog.userEmail` (and any other denormalized email snapshots) per §14/§15.2 *(verified NOT scrubbed, then fixed 2026-08-31, api v3.70.1 — both deletion paths now replace `ActivityLog.userEmail`, `OrderStatusHistory.changedBy`, `McpOAuthGrant.userEmail` with `[deleted user]`; AuditLog metadata retained under §14.5 legal basis)*
 
 ---
 
@@ -2183,7 +2183,7 @@ UI: **Settings → Data Export** card with "Export All Data" button. Auth'd to O
 
 A **user** (not org) can request their personal data be deleted, independent of whether the org stays open.
 
-> **Foundry status (v3.6):** fully implemented — request/confirm/cancel/status endpoints under `/users/me`, 30-day grace + 24-hour immediate path, every-30-minutes execution cron, Clerk-delete-first ordering with the local tombstone in a single transaction, and `DataDeletionAudit` with HMAC'd email. Shape delta: there is no `DataDeletionRequest` model — request state lives as columns on `User` (`deletionRequestedAt`, `deletionScheduledFor`, `deletionFailureCount`, …). Functionally equivalent; the schema below should be treated as "either shape" for new apps. Open verification (checklist): confirm the deletion job scrubs denormalized email snapshots, including `ActivityLog.userEmail` (§14).
+> **Foundry status (v3.6):** fully implemented — request/confirm/cancel/status endpoints under `/users/me`, 30-day grace + 24-hour immediate path, every-30-minutes execution cron, Clerk-delete-first ordering with the local tombstone in a single transaction, and `DataDeletionAudit` with HMAC'd email. Shape delta: there is no `DataDeletionRequest` model — request state lives as columns on `User` (`deletionRequestedAt`, `deletionScheduledFor`, `deletionFailureCount`, …). Functionally equivalent; the schema below should be treated as "either shape" for new apps. Verified + fixed 2026-08-31 (api v3.70.1): the tombstone did NOT scrub snapshots; both deletion paths (the §15.2 flow and the Clerk `user.deleted` webhook) now replace `ActivityLog.userEmail`, `OrderStatusHistory.changedBy`, and `McpOAuthGrant.userEmail` with `[deleted user]` — capturing emails BEFORE the tombstone nulls them. `AuditLog` metadata is retained under §14.5's legal basis; `DataDeletionAudit.emailHmac` is HMAC by design.
 
 #### Endpoint
 
@@ -2432,7 +2432,7 @@ Every app exposes `GET /health`:
 
 This prevents minor third-party hiccups from cascading into total app outage via overzealous LB routing.
 
-> **Foundry status (v3.6):** shape differs — `/health` returns `{status, db, timestamp, version, config}` with no `checks` object and no third-party sub-checks, and a DB failure returns **200 with `status: "degraded"` rather than 503**, so the LB-rotation behavior this section calls critical isn't implemented. `version` comes from a hand-maintained constant (§17).
+> **Foundry status (2026-08-31, api v3.71.0): standard shape shipped.** `checks` object present and a DB failure returns **503** so the LB rotates the instance out. Deliberate interpretation: informational sub-checks (`clerk`, `resend`, `sentry`, `throttle`) are **config-presence**, not live network probes — the LB hits `/health` every few seconds and pinging third parties per probe would be worse than the check is worth. Legacy fields (`db`, `config`) kept for back-compat.
 
 ### Cron conventions
 
@@ -2727,7 +2727,9 @@ This is a deliberate operational stance: **rate-limit transparently, not silentl
 
 ---
 
-## 25. Tenancy Enforcement 🧭 (v3.8 — supersedes "PR review" as the mechanism)
+## 25. Tenancy Enforcement ✅ Foundry (burn-in) · 🧭 elsewhere (v3.8 — supersedes "PR review" as the mechanism)
+
+> **Foundry status (2026-08-31, api v3.70.0/v3.71.0): built.** `src/prisma/tenancy/`: a Prisma query extension under every call site (constructor-return wiring; covers interactive-transaction clients — Prisma 6 has no `$use`), an exhaustive model registry whose spec parses `schema.prisma` and fails CI on any unclassified model, `withoutTenantScope(reason, fn)` as the greppable hatch (~30 sites: auth bootstrap, GDPR sweeps, fleet crons, staff tooling — reviewable in one sitting), and raw SQL excluded in writing per property 5. **Two tiers**: predicate-addressed queries hard-fail; row-identity-addressed queries (the verify-then-act idiom, including `findUnique` by bare id) report to Sentry (`tenancy_tier` tag) until `TENANCY_GUARD_STRICT=1` promotes them — the end state is strict, reached by burning down the report list. Modes: enforce everywhere except prod, which starts in `report`; flip after a quiet week. Two implementation lessons for the next app: (1) PrismaPromise is lazy, so an ALS-based hatch must subscribe to the thenable *inside* the ALS scope or the bypass silently fails to apply; (2) static scans get fooled by tenant-path words in `include:` — restrict matching to the `where:` block, and treat the prod report-mode burn-in as the real sweep.
 
 ### Why this is now its own section
 
@@ -2898,7 +2900,7 @@ Every marketing site that targets EU traffic implements a consent banner. **Stan
 
 Reference: `astro-foundryims/src/layouts/Layout.astro` for the cookie capture script.
 
-> **Foundry status (v3.6): nothing shipped.** No consent banner, `@epic/cookie-consent` doesn't exist as a package, Ahrefs analytics loads unconditionally on every page, and the affiliate cookie is set without a consent gate. The standard requires either a banner or a documented per-app decision to skip — neither exists. Decision needed (now on the audit checklist).
+> **Foundry status (2026-08-31): shipped** (site#62), self-contained pending `@epic/cookie-consent` — extract from Foundry when a second app needs it. `window.fimsConsent` (get/set/has/`when(cat, cb)` — `when` fires late so accepting the banner on the landing page still captures that page view's `?r=`). Marketing pixels and the affiliate cookie are opt-in (the interim marketing categorization above). **Ahrefs Web Analytics stays ungated as a documented decision: it is cookieless** (no persistent identifiers), disclosed in the banner rather than consent-gated — a category this section should recognize explicitly: cookieless analytics need disclosure, not opt-in.
 
 ---
 
