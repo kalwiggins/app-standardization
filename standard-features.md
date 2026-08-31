@@ -1,4 +1,4 @@
-# Epic Design Labs — Standard Features (v3.6)
+# Epic Design Labs — Standard Features (v3.7)
 
 **Canonical reference** for the foundational features every Epic Design Labs app should have. New apps adopt this whole stack so users get a consistent experience — same login, same org model, same affiliate program, same support widget — across the whole portfolio.
 
@@ -8,7 +8,7 @@
 >
 > If your current implementation diverges from these standards, **discuss with leadership before making changes.** Some divergences may be intentional or load-bearing. Others may represent opportunities to align. Major rework should never happen without conversation first.
 >
-> **Platform direction:** All Epic apps are migrating to a standardized auth and payments stack. **Clerk** handles identity (users and organizations). **Throttle** handles transactions and billing (⏸️ still unbuilt — see §23, including the v3.6 naming flag: the shipped THROTTLE *sales-channel* platform is a different thing). Remaining Stackbe apps are in active migration; Foundry completed its Stackbe removal 2026-05-23. This standardization assumes Clerk + Throttle as the baseline architecture going forward.
+> **Platform direction:** All Epic apps are migrating to a standardized auth and payments stack. **Clerk** handles identity (users and organizations). **Throttle** handles transactions and billing — **live as of v3.7**, taking real payments in Evident since 2026-08-08; §23 is now a verified integration contract rather than a stub. (The v3.6 naming flag still stands: the shipped THROTTLE *sales-channel* platform is a different thing.) Remaining Stackbe apps are in active migration; Foundry completed its Stackbe removal 2026-05-23. This standardization assumes Clerk + Throttle as the baseline architecture going forward.
 >
 > Visual design is intentionally *not* standardized — each app earns its own look and feel. What we standardize is **feature parity**: every app has the same login, org model, affiliate program, support, notifications, etc.
 
@@ -17,12 +17,12 @@
 - ✅ **Implemented** — Shipped and verified in at least one app
 - 🚧 **Partial** — Shipped in one app but not universally consistent, or incomplete in the reference implementation
 - 🧭 **In design** — Spec exists, implementation pending
-- ⏸️ **Blocked** — Blocked on a dependency (e.g., Throttle billing doc)
+- ⏸️ **Blocked** — Blocked on a dependency (e.g., a third-party credential or an unshipped upstream)
 - 📋 **Proposed** — New in v3; not yet implemented anywhere
 
 **Reference implementation:** Foundry IMS (api: `Epic-Design-Labs/app-foundry-ims-api`, admin: `app-foundry-ims-admin`, marketing: `astro-foundryims`). Foundry is the most current implementation; if you find a better pattern, propose a standard update rather than diverging silently.
 
-**Document structure (v3.6):** sections are grouped into thematic parts; **§ numbers are stable identifiers and are no longer strictly sequential** (relocated sections keep their numbers so cross-references — including code comments citing them — stay valid).
+**Document structure (v3.7):** sections are grouped into thematic parts; **§ numbers are stable identifiers and are no longer strictly sequential** (relocated sections keep their numbers so cross-references — including code comments citing them — stay valid).
 
 - **Part I — Foundations:** §1 Overview · §2 Status Table + Foundry audit checklist
 - **Part II — Auth & Identity:** §3 Auth & Organizations · §4 Users & Roles · §5 Account Types · §16 Session Permission Re-Validation
@@ -33,6 +33,50 @@
 - **Part VII — Platform Infrastructure:** §12 Outbound Webhooks · §13 API Keys · §14 Activity Log · §14.5 Audit Log · §15 Export & Deletion · §17 Sentry · §17.5 Operational Patterns · §22 Rate Limiting
 - **Part VIII — Web Presence & Marketing:** §18 Marketing Site Contract · §19 Domain Conventions
 - **Part IX — Adoption & Governance:** §20 New-App Checklist + Required Screens · §21 Principles
+
+### Changes in v3.7
+
+**Theme: billing stops being a design document.** Throttle is live and has been billing real customers since 2026-08-08. Everything in v3.2–v3.6 that treated it as unbuilt is now either verified against production or corrected — and several of the design-phase guesses were wrong in ways that failed *silently*, which is why they get their own callouts rather than a quiet edit. **Reference implementation for Part V is Evident, not Foundry**; Foundry has not integrated billing.
+
+**Commission economics — settled:**
+
+- **§6 affiliate tier is 100% of the referred org's first month, one time, capped at $500 per referral, held 30 days.** This replaces the "10% recurring, no cap" figure carried since v3.1, which no app implemented. The cap is per referral with no per-referrer or per-period ceiling, and exists so one rule can span apps priced from $49/mo to four figures.
+- **§7 partner tier is unchanged and now stated precisely:** 10% of every renewal, life of the subscription, **no cap**, and **nothing on the first payment** — that conversion is the partner's own work.
+- **§7 gains a three-tier compensation table.** Affiliate, partner-client-paid, partner-white-label. No org is ever on two at once.
+- **Reporting the commission basis is required; paying it is not.** Accrual and per-client reporting must ship. Payout rails (method, tax forms, mass pay) legitimately may not exist — Evident has none by choice — but nothing may imply to a partner that a reported commission was paid.
+
+**Pay-for-client and handoff — the mechanics, not just the model:**
+
+- **§7 Path A gains five required mechanics** for partner-pays-for-client checkout, each written after the corresponding production failure: record billing intent without flipping entitlement (an abandoned checkout otherwise marks a client partner-billed forever and silently suppresses the partner's own commission); roll the intent back on failure; route takeovers through change-plan, never create-checkout (otherwise the client gets a *second* recurring subscription); pass the discount flag explicitly; require explicit confirmation of the commission forfeit.
+- **§7 Path B gains six required mechanics** for handoff — headlined by 🔴 **the payment method does not move.** The provider's customer keeps the partner's vaulted card, so the next renewal charges the partner or fails, and a browser-side card wallet means the server cannot even detect it. `cardHandoffPendingAt` + a persistent banner + an acknowledge endpoint are now required, along with re-pricing outside the transaction and creating a referral where none exists.
+- **§5 gains `AccountEntitlement`** (NONE / AFFILIATE / REFERRAL / AGENCY) — the org-side axis that actually drives pricing and commission suppression. `accountType` answers "is this user a partner"; it never answered "how is this org compensated."
+
+**§23 rewritten from stub to contract:**
+
+- **Verified event vocabulary.** The guessed list (`invoice.paid`, `trial.ending`, `subscription.canceled`) does not exist. Real events are `subscription.activated / renewed / resumed / paused / plan_changed / past_due / payment_failed / cancelled` (two Ls), `payment.captured`, `payment.failed`, `cart.*`. Trial expiry is scheduled by the app, never announced by Throttle.
+- **Org resolution is a four-step chain, and getting it wrong returns 200.** Subscription webhooks do not carry `externalCustomerId`; reading it alone dropped every subscription event for weeks behind healthy logs. `externalId` and `externalCustomerId` are different fields.
+- **🔴 The one-customer-per-org invariant does not hold under partner billing.** All orgs a partner created share one customer, so `customer.externalId` identifies the *payer*, not the client — and invoice queries scoped by customer leak across a partner's clients (open defect in Evident).
+- **Environment and auth facts that are not guessable:** the API key selects the environment (both share a host), nothing reads `*_LIVE_*` var names, auth is `x-api-key` and a Bearer request returns **200 with an empty body**, base path is `/api/v1`.
+- **`BillingEvent` idempotency log is required and exists in no app**, Evident included.
+- **Known gap: no billing address is collected**, so live authorizations carry no AVS or postal code.
+
+**§8 trials:**
+
+- 🔴 **The trial-expiry sweep must never expire a subscription paid into the future.** The obvious query (`TRIALING AND trialEndsAt < now`) locks out paying customers, because a provider can leave `trialing` on an already-charged subscription. Evident caught this one day before it fired. Skipped rows must be logged loudly, and the cron needs a test — background workers are exactly where harnesses don't exist.
+- Extending a trial **delays the first charge**; nulling `trialEndsAt` removes the deadline entirely, which is lockout insurance, not a fix.
+- The lifecycle table gains canonical API paths. **Reactivate is commonly missed** — Evident has no dedicated path for it.
+
+**Auth:**
+
+- **§4 gains two guard hazards, both of which fail open and silent:** `@Public()` on a controller *class* short-circuits every other guard on it and makes identity spoofable (route-level only, never class-level); and guard **registration location** decides whether a guard runs at all — root-module guards run before imported-module ones, and a misplaced registration still instantiates while blocking nothing. Every guard needs a test that asserts a **denial**.
+
+**§21 principles:**
+
+- **New principle 16 — silent success is the failure mode to design against.** The expensive bugs here never threw: a plan gate that never ran, an import that reported COMPLETED having imported nobody, a webhook that 200'd every event and recorded none. Prefer a loud skip to a quiet pass.
+- **New principle 17 — provider contracts are verified against live traffic, not our own design docs.** §23 carries three worked examples of what a design-phase guess costs.
+- Principle 6 rewritten for the new two-tier economics.
+
+**§20:** billing screens are no longer ⏸️; adds the card-handoff banner and the commission statement (showing the uncapped basis where the $500 cap bound).
 
 ### Changes in v3.6
 
@@ -45,7 +89,7 @@ Two things at once: a **reality refresh** against the shipped Foundry repos (202
 - **§4 multi-user orgs:** every org is explicitly multi-user/multi-role; no app may assume one-user-per-org.
 - **§7 partner applications:** any agency can apply — two entry points (marketing `/partners/apply` and in-app Settings → Partner Program), one reviewed application; partners refer by physically creating the trial (unchanged, restated).
 - **§8 subscription lifecycle table:** Throttle must support start-trial, convert, upgrade, downgrade, cancel, reactivate, and the white-label ⇄ client-paid model switch — each with an API path and a UI surface.
-- **§20 required-screens inventory:** the canonical 21-screen list for auth/affiliate/partner/billing, as the QA walk-through target.
+- **§20 required-screens inventory:** the canonical screen list for auth/affiliate/partner/billing, as the QA walk-through target.
 - **§18.3 conversion pages are `noindex`.**
 
 **Reality refresh:**
@@ -172,9 +216,9 @@ Every Epic Design Labs app provides:
 
 1. **Clerk identity** — magic link + Google + Apple. Each app runs its own Clerk project.
 2. **Multi-tenant organizations** — every customer is one Clerk Organization mirrored locally for data isolation.
-3. **Throttle for payments and billing** — once Throttle integration is finalized, all apps adopt it.
+3. **Throttle for payments and billing** ✅ — live and taking real payments (Evident since 2026-08-08); §23 carries the verified integration contract. Remaining apps adopt it.
 4. **Universal affiliate links** — any user with `affiliate.read` can copy their org's `?r=CODE` link and the org earns credit on signups.
-5. **Partner program** ✅ (commissions ⏸️) — designated partners get a dashboard, can create client trials directly, earn 10% recurring via partner seats. White-label (partner stays owner) and transfer-to-client paths both supported.
+5. **Partner program** ✅ (accrual + reporting live; payout rails ⏸️) — designated partners get a dashboard, can create client trials directly, and earn 10% of every renewal via partner seats. White-label (partner pays, 20% discount) and transfer-to-client (handoff, 10% commission) paths both supported, with required mechanics for each in §7.
 6. **In-app support** — Dispatch Tickets wired into a Help section, scoped per-org.
 7. **Transactional email via Resend** — `react-email` templates compiled at build time (🚧 Foundry still on inline HTML — see §9).
 8. **Outbound webhooks** ✅ — push events to customer endpoints with HMAC signing and retries (DLQ + usage metrics 🚧 — see §12 Foundry status).
@@ -211,9 +255,16 @@ The exceptions are **shared libraries** (e.g., `@epic/disposable-emails`, `@epic
 | Partner role / `accountType` | ✅ | `User.accountType` live; toggled on application approval; pushed to Clerk `publicMetadata` on change (not per-request — see §3.6). |
 | Partner dashboard + partner seats | ✅ | Referrals + Active seats tabs, "Create trial for client" dialog, Settings → Partners (client side) with per-seat tier control. Commissions/team-assignment endpoints still ⏸️ billing. |
 | Partner-created trials (direct referral) | ✅ | `POST /partner/trials` + `referralType: "direct"` + daily abandoned-trial cleanup cron. |
-| Trial period / `trialEndsAt` | ⏸️ | Blocked on Throttle billing doc. Foundry has only an `isPartnerTrial` boolean today — the reserved fields (§3.5, §23) were never added. |
-| Conversion detection (`Referral.convertedAt`) | ⏸️ | Column exists; no writer. Blocked on Throttle billing doc. |
-| Reward calculation + payout | ⏸️ | 10% recurring commission on the promoted-client path; 20% white-label discount netted at source (v3.6 — see §7). Paid month N+1. Blocked on Throttle billing doc. |
+| Trial period / `trialEndsAt` | ✅ Evident · ⏸️ Foundry | Live in Evident with the §8 expiry guard. Foundry has only an `isPartnerTrial` boolean — the reserved fields (§3.5, §23) were never added. |
+| Trial-expiry sweep safety guard | 🚧 | **Required** (§8): never expire a subscription paid into the future; log skipped rows loudly. Implemented in Evident after it nearly locked out a paying customer. Not present anywhere else; no test harness on the worker that runs it. |
+| Conversion detection (`Referral.convertedAt`) | ✅ Evident · ⏸️ Foundry | Written from the subscription-activation webhook. |
+| Commission accrual + reporting | ✅ Evident | Affiliate 100%-of-first-month capped $500 (§6); partner 10% of renewals, no cap (§7). Rates in one shared constants module. |
+| Commission **payout** rails | ⏸️ | Accrual and reporting exist; nothing moves money. No payout method, tax forms, or mass-pay anywhere. Do not imply to partners that a reported commission has been paid. |
+| Pay-for-client (white-label) checkout | ✅ Evident | 20% discount at source. Five required mechanics in §7 Path A — all five were written after a production failure. |
+| Handoff (white-label → client-paid) | ✅ Evident | Six required mechanics in §7 Path B. 🔴 The payment method does **not** move; `cardHandoffPendingAt` + banner + acknowledge endpoint are required. |
+| Throttle webhook contract | ✅ Evident | Verified event vocabulary, signature + 5-min replay window, four-step org resolution (§23). The v3.6 guessed vocabulary was wrong and failed silently. |
+| `BillingEvent` idempotency log | 📋 | Required by §23; **exists in no app**, Evident included. Webhook delivery is at-least-once. |
+| Billing-address / AVS collection | 🚧 | Checkout sends no billing address, so live authorizations reach the processor with no AVS or postal code — an unexplained decline risk. Blocked on confirming the `collect` field shape with Throttle (§23). |
 | Support (Dispatch Tickets) | ✅ | Tickets scoped per-org via tag, third-party API wrapped server-side. |
 | Transactional email (Resend) | 🚧 | Foundry uses Resend with inline HTML for PO send/follow-up. v3 standardizes `react-email`. Migration required. |
 | Notification center (in-app bell + dropdown) | ✅ | Bell icon (unread dot, no count), dropdown of recent 20. No full-history page yet. |
@@ -256,7 +307,10 @@ Statuses synced to the shipped repos 2026-08-23 (api v3.54.x).
 - [x] Update marketing-site cookie capture script to use `Domain=.foundryims.com` per §18.2 *(done)*
 - [x] Remove the URL-bridge link rewriting from `astro-foundryims/src/layouts/Layout.astro` *(done)*
 - [ ] Add `user.created` org auto-provisioning per §3.9 *(the handler + svix verification exist and cover 12 event types; affiliate attribution moved to `organizationMembership.created` and works — but org auto-provision from `user.created` is still a stub)*
-- [ ] Migrate from current billing (whatever is in place) to Throttle once Throttle ships per §23
+- [ ] Migrate from current billing (whatever is in place) to Throttle per §23 — **no longer blocked; Throttle is live.** Start from Evident's `billing/` + `throttle/` modules and copy `resolve-organization.spec.ts` verbatim
+- [ ] **New (v3.7):** audit for `@Public()` on controller *classes* — it disables every other guard on the controller (§4)
+- [ ] **New (v3.7):** add a denial-asserting test for every guard; an allow-only test cannot distinguish a working guard from a no-op (§4)
+- [ ] **New (v3.7):** add the `BillingEvent` idempotency table per §23 *(exists in no app, Evident included)*
 - [ ] Build backup runbook documenting 30-day expiry + deletion-rerun-on-restore per §15.2
 - [ ] Set up 7-year audit-log cold-storage infrastructure per §14.5
 - [x] Convert Stackbe → fully-on-Clerk *(done 2026-05-23; Stackbe fully removed)*
@@ -542,6 +596,30 @@ const { can } = usePermission();
 if (!can("org.manage")) return null;
 ```
 
+#### Guard hazards — both fail open and fail silently (v3.7)
+
+Two ways to end up with a guard that returns "allow" forever while looking correctly wired. Neither throws, neither logs, and both have shipped to production.
+
+**1. `@Public()` on a controller *class* disables every other guard on it.**
+
+Guards conventionally start `if (isPublic) return true`. Put `@Public()` on a class and it short-circuits **all** of them — `@RequirePermission()`, `@RequirePartner()`, tenancy — for every route on that controller. Identity then comes from whatever headers the caller sends, which makes it spoofable.
+
+- `@Public()` is **route-level only**. Never class-level.
+- A controller with genuinely public routes marks those routes, not the class.
+- If a class-level escape is needed for tenancy specifically, use a narrow decorator that *only* skips tenancy (`@SkipTenancy()`), never the blanket public flag.
+- Audit for this directly: grep for `@Public()` immediately preceding `export class`.
+
+**2. Guard registration order and location decide whether a guard runs at all.**
+
+With Nest-style `APP_GUARD` providers, **guards registered in the root module run before guards registered in imported modules.** A guard that must see the result of an earlier one has to be registered where that ordering holds — move its registration to a different module and it still instantiates, still appears in the DI graph, and never blocks anything.
+
+The same applies to guards that must sit alongside a specific peer: a tenancy guard for API keys must be registered next to the JWT guard, or it silently no-ops on every request.
+
+- Registration location is **load-bearing**; comment it at the registration site with *why*.
+- Every guard needs at least one test that asserts a request is **denied**. A guard tested only on the allow path is indistinguishable from a guard that does nothing.
+
+> This is the §21 principle 16 failure mode in its purest form: the system reports success while enforcing nothing.
+
 ### Invite flow
 
 `POST /users/invite` with `{ email, role }`. Calls `clerk.organizations.createOrganizationInvitation`. Local User row created with `isPending: true` until they accept.
@@ -560,6 +638,31 @@ Every Clerk user has `accountType` in `publicMetadata` (mirrored to `User.accoun
 | `partner` ✅ | Agencies, consultants, resellers | Adds Partner sidebar section: Referrals tab, "Create Trial for Client" button, partner profile, payout settings, partner seat assignments. |
 
 Both types log in identically. Partner is a role, not a separate auth system.
+
+### Org entitlement — the client-side axis (v3.7)
+
+`accountType` answers "is this **user** a partner?" It does not answer "how is this **org** compensated?" — and every commission and pricing decision in §6/§7 turns on the second question. Apps need both axes.
+
+```prisma
+enum AccountEntitlement {
+  NONE        // organic signup; no referral relationship
+  AFFILIATE   // arrived via an affiliate link; §6 first-month bounty applies once
+  REFERRAL    // partner-originated, client pays their own way; partner earns 10% of renewals (Path B)
+  AGENCY      // partner-billed white-label; invoiced at 80% of list, NO commission accrues (Path A)
+}
+
+model Organization {
+  entitlement AccountEntitlement @default(NONE)
+}
+```
+
+Why this has to be an org column rather than derived on the fly:
+
+- **It is what the pricing call reads.** The 20% discount is applied by looking at the org's entitlement, not by joining back through partner seats at invoice time.
+- **It is what suppresses commission.** `AGENCY` earning no commission is the "one client, one model" rule (§7) expressed as data. Deriving it from the presence of a partner seat gets this wrong — a client can hold a partner seat *and* pay their own bill, which is exactly Path B.
+- **It survives the relationship.** A partner seat can be revoked by either side while the billing arrangement continues; the two must be able to disagree.
+
+**The transitions are the partner election (§7):** `REFERRAL → AGENCY` on partner-checkout **activation** (never at checkout start — Path A rule 1), and `AGENCY → REFERRAL` on handoff. Nothing else may write this column.
 
 ---
 
@@ -611,12 +714,14 @@ When the API returns a 401 with code `permission_changed`:
       (anyone shares ?r=)            (partner created the trial)
               │                             │
               ▼                             ▼
-      10% recurring commission        10% recurring commission
-      (no cap, paid month N+1)        (no cap, paid month N+1)
+      100% of the referred org's      10% of every renewal,
+      FIRST MONTH, one time,          for the life of the
+      capped at $500 per referral,    subscription. Nothing on
+      held 30 days.                   the first payment.
                                       Plus: partner seat in client org
 ```
 
-Both paths share the same commission rate. **The differentiator is partner status** — partners get the dashboard, the "Create Trial" button, and the partner seat in client orgs. Partner referrals require the partner to physically create the trial (action is proof of attribution); affiliate referrals attribute via shared link.
+**The two tiers pay differently, and deliberately so** (v3.7 — see "Commission terms" below). An affiliate makes an introduction and is done: they get a large one-time bounty. A partner carries the client relationship indefinitely: they get a smaller slice of every renewal. **The differentiator is partner status** — partners get the dashboard, the "Create Trial" button, and the partner seat in client orgs. Partner referrals require the partner to physically create the trial (action is proof of attribution); affiliate referrals attribute via shared link.
 
 ### Trade-offs of per-org codes (and how to mitigate)
 
@@ -636,11 +741,41 @@ These rules apply to every app:
 
 1. **One affiliate code per organization — and every user has one by default.** The affiliate program is not opt-in, gated, or applied-for: every org gets a code (lazy-generated on first view), and every user in every role holds `affiliate.read`, so **every signed-in user of every Epic app can open Settings → Affiliate and copy a working share link from day one.** Multiple users in the same org share one code; commissions accrue to the org, not to individual users. (See trade-offs above.)
 
-2. **Last-touch attribution wins.** If a prospect clicks two different affiliate links in the 30-day cookie window, the most recent code overwrites the earlier one. This is a deliberate trade-off: simpler than first-touch, aligned with industry standard, but unfair to top-of-funnel educators who may lose credit to bottom-of-funnel coupon sites. Pricing the affiliate tier at 10% with no cap is intended to keep both kinds of partners engaged.
+2. **Last-touch attribution wins.** If a prospect clicks two different affiliate links in the 30-day cookie window, the most recent code overwrites the earlier one. This is a deliberate trade-off: simpler than first-touch, aligned with industry standard, but unfair to top-of-funnel educators who may lose credit to bottom-of-funnel coupon sites. Paying the affiliate tier a full first month is intended to make even a single successful introduction worth the effort.
 
 3. **Self-referral is rejected by membership match against the referrer's org.** If the signing-up user's email matches **any active member** of the referrer's org, attribution is blocked. With per-org codes (see rule 1), the entire org shares the link — so a teammate signing up via their own org's link IS the org self-referring. Returns `{ attributed: false, reason: "self_referral" }`. (Earlier drafts checked only the referrer's own email — that was incoherent with the per-org primitive; a teammate signup with a different email would have passed and the org would have credited itself.)
 
 4. **Code regeneration: snapshots are immutable.** A user with `affiliate.manage` can regenerate their org's `affiliateCode`. Existing `Referral` rows keep the old code (we snapshot `affiliateCode` on the Referral). The old code stops working for *new* attributions.
+
+### Commission terms (v3.7 — stipulated)
+
+**Affiliate referrals earn 100% of the referred org's first month, one time, capped at $500 per referral, held 30 days from the qualifying payment.**
+
+Every clause is load-bearing:
+
+| Clause | Why |
+|---|---|
+| **100% of the first month** | A single successful introduction is worth a real amount of money, which is what makes a non-partner bother to share the link at all. A trickle of 10% on a $49 plan never motivated anyone. |
+| **One time — first payment only** | Affiliates make an introduction and are done. Ongoing revenue share is the *partner* tier's compensation for carrying an ongoing client relationship (§7). Paying both would pay twice for one act. |
+| **Capped at $500 per referral** | Portfolio apps price very differently. On a $49/mo app the cap never binds; on an app with four-figure monthly plans, an uncapped first month is a payout nobody signed off on. The cap is what lets one commission rule cover every app in the portfolio. |
+| **Per referral** | The cap applies to each referred org independently. An affiliate who refers ten orgs can earn ten capped commissions; there is no per-referrer or per-period ceiling. Productive affiliates are never penalised for volume. |
+| **30-day hold** | The commission is calculated at the qualifying payment but only becomes payable 30 days later, so refunds and chargebacks land first. Partner commissions have no hold — they accrue on renewals, which are already proven payments. |
+
+**Worked examples:**
+
+```
+App bills $49/mo   → first month $49    → commission $49    (cap does not bind)
+App bills $499/mo  → first month $499   → commission $499   (cap does not bind)
+App bills $2,000/mo → first month $2,000 → commission $500  (capped)
+```
+
+**Implementation requirements:**
+
+- Rate, cap, and hold live in **one constants module** read by both the code that *creates* commissions (the billing webhook) and the code that *reports* them (the partner/affiliate dashboard). A rate that can drift between what you pay and what you tell people is a support incident waiting to happen. Reference: `apps/api/src/modules/billing/commission.constants.ts` in Evident.
+- The cap is applied at commission *creation*, and the uncapped basis is stored alongside it so the dashboard can show "capped from $X" rather than an unexplained number.
+- **Discounted subscriptions commission on the amount actually invoiced**, not list price. A white-label agency org invoiced at 80% of list (§7 Path A) earns no affiliate commission at all — see §7's "one client, one model" rule.
+
+> **Partner rate is different and is specified in §7:** 10% of every renewal, for the life of the subscription, **no cap**, nothing on the first payment. The asymmetry is intentional — see §7 "Reward tier and commission timing."
 
 ### Schema
 
@@ -762,7 +897,7 @@ UI vocabulary: "your link", "sign-ups via your link", "Affiliate" page name. **N
 
 # Part IV — Referrals & Partner Program
 
-## 7. Partner Program ✅ (commission payout ⏸️ billing)
+## 7. Partner Program ✅ (accrual + reporting live; payout rails ⏸️)
 
 The partner program is a fundamentally different model from affiliates. **Partners earn commission by *creating* the trial directly.** This eliminates attribution disputes that plague most B2B SaaS partner programs.
 
@@ -772,7 +907,7 @@ If you want partner-tier credit, **you must be the one that physically sets up t
 
 A user who promotes the product via affiliate link still gets affiliate credit. Partner status unlocks the partner dashboard, the partner seat (continued access to client orgs), and the trial-creation flow.
 
-**Both affiliate and partner referrals earn 10% recurring commission** on the promoted-client path. The differentiator is the *kind* of relationship — affiliates are link-sharers; partners are integrators with ongoing client relationships. **Partners additionally get an election per client** (v3.6): keep paying the client's bill white-label at a **20% discount netted at source**, or spin ownership off to the client and earn the **10% recurring commission** — see "Two ownership paths" below.
+**Affiliate and partner referrals are compensated differently** (v3.7): an affiliate takes 100% of the referred org's first month, one time, capped at $500 (§6); a partner takes **10% of every renewal for the life of the subscription, no cap**, and nothing on the first payment — that one is the partner's own conversion. The difference tracks the *kind* of relationship — affiliates are link-sharers making a one-off introduction; partners are integrators carrying an ongoing client relationship. **Partners additionally get an election per client** (v3.6): keep paying the client's bill white-label at a **20% discount netted at source**, or spin ownership off to the client and earn the **10% recurring commission** — see "Two ownership paths" below.
 
 ### Becoming a partner
 
@@ -915,7 +1050,33 @@ The partner pays the subscription fee on the client's behalf as part of an all-i
 - No 10% commission accrues on a white-label org — the discount **is** the partner economics for that client. One client, one of the two models, never both.
 - The client may not have visibility into the bill (this is a partner choice).
 
-> **Legal status:** Whether this is a "discount" (treated as net revenue) or a "commission" (gross revenue minus a 1099 expense) for accounting and tax purposes is **pending legal review**. The economics match either way; the line items on financial statements and 1099 forms differ. Path A specifics may evolve once Throttle integration ships and finance/legal sign off. Implementations should treat the discount-at-source mechanism as the default direction but expect refinement.
+> **Legal status:** Whether this is a "discount" (treated as net revenue) or a "commission" (gross revenue minus a 1099 expense) for accounting and tax purposes is **pending legal review**. The economics match either way; the line items on financial statements and 1099 forms differ. Path A specifics may evolve once finance/legal sign off. Implementations should treat the discount-at-source mechanism as the default direction but expect refinement.
+
+##### Pay-for-client checkout — required mechanics (v3.7)
+
+Putting a partner's card behind a client's subscription is the single most trap-dense flow in this document. Every rule below was written after the corresponding failure was found in production. **Implement all five.**
+
+**1. Record the billing intent; do not flip entitlement until the subscription activates.**
+
+Starting a checkout is not paying. If the client org is marked as partner-billed when the checkout *opens*, an abandoned checkout leaves it marked that way permanently — nobody is actually paying, and because partner-billed orgs accrue no commission (see the one-model rule above), the partner's 10% is silently suppressed on a client they never took over. Write the intent to a nullable pointer on the subscription; let the **activation webhook** promote the entitlement. That is the moment the decision becomes real.
+
+**2. Roll the intent back if the checkout call fails.**
+
+The intent is written before the outbound provider call, so a provider failure strands it. It is not inert: the activation webhook will later read it and promote an org to partner-billed even if the *client* subscribes on their own card. Wrap the provider call and clear the pointer on failure.
+
+**3. Route a takeover through change-plan, never through create-checkout.**
+
+A partner frequently takes over a client who already converted on their own. `createCheckout` on a live subscription issues a **second recurring subscription** — the client is now billed twice, and the two rows fight over the same org. Move the existing subscription in place, and fall back to checkout only when there is genuinely nothing to move.
+
+**4. Pass the discount flag explicitly — do not derive it from entitlement.**
+
+By rule 1, entitlement has *not* flipped yet at the moment the checkout is priced. Code that reads entitlement to decide whether to apply the 20% will price the very first partner invoice at full list, and the org can never reach the discounted state. The pricing call takes the flag as an argument.
+
+**5. Require explicit confirmation of the trade-off.**
+
+Converting a client to partner-billed forfeits the partner's 10% lifetime commission on that client. That is a commercial decision, not a formality. The API must reject the request unless it carries an explicit opt-in flag, and the UI must state the forfeit in words before sending it. Reference wording: *"Take over this client's subscription at the 20% partner rate. This forfeits your 10% lifetime commission on this client."*
+
+> **Reference implementation:** `initiateAgencyCheckout` in `apps/api/src/modules/partner/partner.service.ts` (Evident) implements all five, with the reasoning in comments.
 
 #### Path B: Promote client to owner (spin-off, 10% commission)
 
@@ -926,9 +1087,28 @@ The partner promotes the client user to OWNER. Partner becomes a `PartnerSeat` a
 - On confirm:
   - Clerk org membership: client user promoted to `org:admin`, partner user demoted.
   - Local: client user `role` set to `OWNER`. Partner user removed from local `User` table for that org (they retain access via the existing `PartnerSeat` row, created at trial creation).
-  - Throttle billing setup flow surfaces to the client.
   - `Referral.status` will transition `active` → `converted` when the client's first invoice is paid.
 - Partner continues to earn 10% commission on client's bill (paid out as commission since the client now pays the bill, not as discount).
+
+##### Handoff — required mechanics (v3.7)
+
+A handoff out of a **white-label** arrangement is not just an ownership change: it moves the org between two billing models mid-subscription. Six requirements:
+
+**1. Clear the billing intent, not just the entitlement.** Set the org back to client-paid *and* null the partner-billing pointer on the subscription. Leaving the pointer behind means a later re-activation silently promotes the org straight back to partner-billed, undoing the handoff without anyone touching it.
+
+**2. 🔴 The payment method does not move — say so, in the product.** This is the one that surprises people. After handoff, the billing provider's customer record still holds **whatever card the partner vaulted at partner checkout**, so the next renewal charges the *partner* — or fails. Nothing in an ownership transfer moves a payment method, and where the card wallet is a browser-side component (it is, in Throttle) the server cannot even read whether a card is present, let alone re-assign one.
+
+  Required: persist a `cardHandoffPendingAt` timestamp on the subscription at handoff, surface a persistent banner to the new owner until they add their own card, and expose an acknowledge endpoint that clears it. **A handoff that silently leaves the partner's card on file is a billing incident with a delay fuse.**
+
+**3. Re-price outside the database transaction.** Dropping the 20% discount is an outbound provider call. Holding a DB transaction open across it is a long-lived lock for no benefit. Do the ownership transfer transactionally, then re-price **best-effort** — a failed re-price leaves the client on the partner rate, which is visible on the dashboard and correctable with a plan change. A failed *ownership transfer* is not recoverable, so that is the part that must be atomic.
+
+**4. Create the referral if none exists.** An org can reach partner-billed status by paths other than a partner-created trial (manual link, support action, migration). Handing such an org off with no `Referral` row means the 10% has nothing to attach to and the partner earns nothing forever. Create one at handoff, status `converted`.
+
+**5. Push the role change to Clerk metadata, fire-and-forget.** The new owner's client-side `publicMetadata` is stale until something writes it (§3.7). The API re-validates against the local DB regardless, so this is a UI-correctness write, not a security one — never block the handoff on it.
+
+**6. Return which kind of handoff happened.** The UI needs to know whether this was a white-label exit (warn about the card and the rate change at renewal) or an ordinary ownership transfer (no billing consequences at all). Two very different confirmation screens.
+
+> **Reference implementation:** `handoffOwnerToClient` in `apps/api/src/modules/partner/partner.service.ts` (Evident), plus `POST /billing/card-handoff/acknowledge`.
 
 ### Client-initiated ownership claim (escape hatch via support)
 
@@ -975,16 +1155,27 @@ We deliberately do **not** add: pending-trial conflict warnings, consolidated in
 
 ### Reward tier and commission timing
 
-- **10% recurring commission, no cap, no time limit** for both `affiliate` and `direct` referrals on client-paid (Path B / affiliate) orgs.
-- **20% discount netted at source** for white-label (Path A) orgs — applied on the partner's invoice, never paid out; no commission accrues on those orgs.
-- Commissions for billing events in month N are paid in month N+1. Example: a client pays their April invoice on April 15. The partner's $X commission accrues to the May commission statement, paid early May.
-- This gives clean monthly reconciliation, time for refunds/chargebacks to settle, and predictable payout timing.
+The portfolio has exactly **three** compensation shapes. Every referred org is on exactly one of them at any time.
 
-> **On the absence of a cap or sunset:** This is a deliberate choice. A 24/36-month cap would lower lifetime commission cost but adds complexity (cap tracking, sunset notifications, partner disputes near expiry) and weakens the partner's long-term commitment to the client relationship. We accept that a partner who originated a client 5 years ago still earns 10% on that client's bill — this aligns the partner's incentive with the client's long-term success. If commission economics ever need adjusting, the standard will be revisited.
+| Tier | Rate | Cap | Timing |
+|---|---|---|---|
+| **Affiliate** (`referralType: affiliate`) | 100% of the referred org's **first month**, one time | **$500 per referral** | Accrues at the qualifying payment; **payable 30 days later** (refund/chargeback window). §6. |
+| **Partner — Path B, client-paid** (`referralType: direct`) | **10% of every renewal**, for the life of the subscription. **Nothing on the first payment.** | **No cap, no sunset** | Accrues on each renewal payment; no hold. Month N events pay in month N+1. |
+| **Partner — Path A, white-label** | **20% discount netted at source** — the partner is invoiced at 80% of list | n/a — never paid out | Applied on every partner invoice for as long as the arrangement lasts. |
+
+**No org ever earns on two tiers at once.** A white-label (Path A) org accrues *no* commission — the discount is the partner economics for that client. Electing Path B gives up the discount and starts the 10%; electing Path A gives up the 10% and starts the discount. One client, one model, never both. The election is per client and reversible (§7 "Two ownership paths").
+
+**Why the first payment is excluded from the partner 10%:** the partner set the trial up themselves. The conversion is their own work on their own client, not a renewal they're being retained to protect. Paying commission on it would be paying the partner to close a deal they were already closing.
+
+**Why the partner tier has no cap or sunset, while the affiliate tier has both:** they compensate different things. The affiliate bounty is priced for a single act and capped so one commission rule can span apps with wildly different price points. The partner 10% is priced for an ongoing relationship — a 24/36-month sunset would lower lifetime cost but adds cap tracking, sunset notifications, and partner disputes near expiry, and it weakens exactly the long-term commitment the tier exists to buy. We accept that a partner who originated a client five years ago still earns 10% on that client's bill.
+
+**Commission basis is the amount actually invoiced, not list price.** Discounts, proration, and credits all flow through to the basis. Reporting surfaces must show the basis alongside the commission so a partner can reconcile a number that moved.
+
+> **Reporting vs. paying are separate problems.** A conforming implementation must *calculate and report* the commission basis per client, per period. Actually moving money (payout method, tax forms, 1099s, mass-pay batching) is a further step and may legitimately not exist yet — Evident reports the basis and has no payout desk at all, deliberately. Do not let the absence of a payout rail block shipping the accrual and reporting, and do not imply to partners that a reported commission has been paid.
 
 ### API surface
 
-> **Foundry status (v3.6):** live today — `GET /partner/me/capabilities` (in place of `profile`), `GET /partner/me/referrals`, `GET /partner/me/seats`, `POST /partner/seats/:id/leave`, `POST /partner/trials`, the applications set (`POST /partner/applications` public, `/from-trial`, `/mine`, list, `:id/approve`, `:id/reject`), `POST /partner/clients/link-existing`, and the client-side `/orgs/me/partner-seats` GET/PATCH/DELETE. Still unbuilt (⏸️ billing): profile/payout, commissions, and team-assignment endpoints. The marketing site's `/partners/apply` currently has no form — it routes into signup + the in-app application.
+> **Foundry status (v3.6):** live today — `GET /partner/me/capabilities` (in place of `profile`), `GET /partner/me/referrals`, `GET /partner/me/seats`, `POST /partner/seats/:id/leave`, `POST /partner/trials`, the applications set (`POST /partner/applications` public, `/from-trial`, `/mine`, list, `:id/approve`, `:id/reject`), `POST /partner/clients/link-existing`, and the client-side `/orgs/me/partner-seats` GET/PATCH/DELETE. Still unbuilt: profile/payout, commissions, and team-assignment endpoints — no longer blocked on billing, simply not built. Evident has the commissions and dashboard endpoints live. The marketing site's `/partners/apply` currently has no form — it routes into signup + the in-app application.
 
 ```
 GET    /partner/me/profile                  → partner profile + payout settings
@@ -1010,31 +1201,46 @@ POST   /support/ownership-claim             → client requests ownership transf
 
 # Part V — Billing (Throttle)
 
-## 8. Trials ⏸️
+## 8. Trials ✅ (live in Evident; ⏸️ elsewhere pending adoption)
 
 ### Public signup ✅ (mechanic exists, no time-bound trial)
 
 Today: anyone hitting `/signup` creates a Clerk user + org instantly. Org has no expiration, no billing state. Effectively a permanent free tier.
 
-### Once Throttle billing ships:
+### Trial lifecycle
 
 - New orgs get `trialEndsAt: NOW + 14 days` (default; configurable per app).
-- A scheduled job flips `status` to `expired` past the deadline.
-- Affiliate `Referral.status` transitions `active` → `expired` when trial expires without converting.
+- A scheduled job flips `status` to `expired` past the deadline — **subject to the guard below, which is not optional.**
+- Affiliate `Referral.status` transitions `active` → `expired` when a trial expires without converting.
+
+> #### 🔴 The trial-expiry sweep must never expire a paying customer
+>
+> The obvious implementation — match `status = TRIALING AND trialEndsAt < now`, flip to `EXPIRED` — **is wrong, and it locks out paying customers.** Throttle can leave `status: trialing` on a subscription it has already charged. Apps mirror provider status verbatim, so a stale provider status becomes a local `TRIALING` row with a past `trialEndsAt` on an account that is paid up. The sweep then expires it, and the plan gate locks the customer out of an account they are paying for. Evident caught this one day before it fired on a live account.
+>
+> **Required in every implementation:**
+>
+> 1. **Never expire a subscription paid into the future.** The match must also require `currentPeriodEnd IS NULL OR currentPeriodEnd <= now`. A trial end date alone is not evidence that nothing has been paid.
+> 2. **Log the skips loudly.** Query the paid-but-`trialing` rows separately and emit a `warn` naming each org and its paid-through date. Skipping them quietly hides a provider bug behind a healthy-looking log line — see §21 principle 16.
+> 3. **Cover it.** A billing cron that can revoke access needs a test, and background workers are exactly where test harnesses tend not to exist. Evident's does not have one; this cron is covered by typecheck and production dry runs only, which is not good enough for the blast radius.
+>
+> Reference: `apps/worker/src/schedulers/trial-expiry.scheduler.ts` (Evident).
+
+> **Extending a trial delays the first charge.** Trial-remaining calculations read `Subscription.trialEndsAt`, and a future date is handed to the provider at checkout as free days — so "give them another week" also means "don't charge them for another week," on the very checkout you are trying to complete. If a conversion must bill same-day, null the column first (null grants zero days). Nulling is also the only way to *remove* a deadline: a null `trialEndsAt` can never be matched by the expiry sweep, which grants indefinite access until someone converts the account. That is deliberate lockout insurance, not a fix — track anything you park that way.
 
 ### Required subscription lifecycle operations (v3.6)
 
 **Stipulated: every app, through Throttle, must support the full subscription lifecycle** — these are the operations the billing integration exists to provide, and every one needs both an API path and a UI surface (§20 screens list):
 
-| Operation | Who initiates | Notes |
-|---|---|---|
-| **Start trial** | Signup (self-serve) or partner (`POST /partner/trials`) | Sets `trialEndsAt`; org `status: "trial"`. |
-| **Convert trial → paid** | Client (or partner on white-label) adds payment method + picks plan | Fires `Referral` conversion (§7); org `status: "active"`. |
-| **Upgrade plan** | OWNER (or white-label partner) | Prorated per Throttle rules; effective immediately. |
-| **Downgrade plan** | OWNER (or white-label partner) | Takes effect at next renewal; feature gates adjust then. |
-| **Cancel** | OWNER (or white-label partner) | Runs to end of paid period, then org `status: "suspended"`; data retained per §15 retention rules. |
-| **Reactivate** | OWNER | From suspended back to active without data loss. |
-| **Switch billing model** | Partner (white-label ⇄ client-paid) | The §7 election: promote-to-client moves the org from partner-paid (20% discount) to client-paid (10% commission). |
+| Operation | Who initiates | Canonical path | Notes |
+|---|---|---|---|
+| **Start trial** | Signup (self-serve) or partner | `POST /partner/trials` | Sets `trialEndsAt`; org `status: "trial"`. |
+| **Convert trial → paid** | Client (or partner on white-label) adds payment method + picks plan | `POST /billing/checkout` | Fires `Referral` conversion (§7); org `status: "active"`. |
+| **Upgrade plan** | OWNER (or white-label partner) | `POST /billing/change-plan` | Prorated; effective immediately. **Never `checkout` on a live subscription** — that issues a second one. |
+| **Downgrade plan** | OWNER (or white-label partner) | `POST /billing/change-plan` | Takes effect at next renewal; feature gates adjust then. |
+| **Cancel** | OWNER (or white-label partner) | `POST /billing/cancel` | Runs to end of paid period, then org `status: "suspended"`; data retained per §15. |
+| **Reactivate** | OWNER | `POST /billing/change-plan` | From suspended back to active without data loss. ⚠️ **Commonly missed** — Evident has no dedicated reactivate path. |
+| **Switch billing model** | Partner (white-label ⇄ client-paid) | `POST /partner/trials/:id/agency-checkout` · `POST /partner/trials/:id/handoff-owner` | The §7 election. Both directions have required mechanics — Path A rules 1–5, handoff rules 1–6. |
+| **Recover from a dead pointer** | System | `POST /billing/sync` | A stored `externalSubscriptionId` that 404s (sandbox id in a live environment) must clear itself and fall through to a fresh checkout, not 500. |
 
 Payment-failure dunning rides on `billing.payment_failed` (§11, transactional) rather than being a lifecycle state of its own.
 
@@ -1042,7 +1248,7 @@ Payment-failure dunning rides on `billing.payment_failed` (§11, transactional) 
 
 Same lifecycle, but `Referral.referralType = "direct"`. Partner sees the trial countdown in their Referrals tab. *(Foundry status: `POST /partner/trials` + abandoned-trial cleanup are live; the countdown itself is ⏸️ until `trialEndsAt` exists.)*
 
-### Conversion detection ⏸️
+### Conversion detection ✅
 
 When Throttle reports a paid subscription:
 1. Find the `Referral` row by `referredOrgId`.
@@ -1050,77 +1256,136 @@ When Throttle reports a paid subscription:
 3. Calculate reward (10% of MRR).
 4. Set `rewardStatus = "pending"` until payout runs (next month).
 
-> **Detailed billing standardization is a separate document — see §23 stub.** This section reserves the integration points.
+> **The integration contract — environments, auth, event vocabulary, org resolution, idempotency — is §23.** Read it before writing a webhook handler.
 
 ---
 
-## 23. Billing & Throttle Integration ⏸️ (stub)
+## 23. Billing & Throttle Integration ✅ (live — reference implementation: Evident)
 
-> **Status as of v3.2:** Throttle is Epic's intended billing platform — **not yet built or live**. Phase: **design**. ETA: **TBD, gated on its own design doc**. Until §23 is upgraded out of stub status, **do not depend on Throttle for any blocking design decision in any app**. Sections marked ⏸️ in §2 are blocked on this doc landing.
+> **Status as of v3.7: Throttle billing is BUILT AND LIVE.** This section is no longer a stub. Evident has run the production Throttle key since 2026-08-08 on the **Stripe** connector, with real invoices settled, and implements the full lifecycle in §8. The v3.2–v3.6 instruction to "not depend on Throttle for any blocking design decision" is **withdrawn** — but note that the design-phase guesses in those revisions were wrong in specific, expensive ways, corrected below. If you built to the old stub, re-read "Event vocabulary" and "Resolving the org" before shipping.
+>
+> **Reference implementation is Evident, not Foundry,** for this section only. Foundry has not integrated billing. `apps/api/src/modules/billing/` and `apps/api/src/modules/throttle/`.
 
-> **Naming flag (v3.6):** "Throttle" now names two different things. The billing platform this section describes remains unbuilt. Separately, a shipped THROTTLE **sales-channel platform** exists and Foundry integrates with it as a channel (Foundry serves catalog; Throttle owns checkout/orders — `ChannelPlatform.THROTTLE` in the Foundry schema). These must not be conflated: nothing in Foundry's channel integration is billing, and nothing in this section is implemented. Next revision should either rename one or explicitly define both roles.
+> **Naming flag (carried from v3.6, still unresolved):** "Throttle" names two different things — the billing platform this section describes (live, Evident bills on it) and a separate shipped THROTTLE **sales-channel** platform that Foundry integrates with as a channel (Foundry serves catalog; Throttle owns checkout/orders — `ChannelPlatform.THROTTLE`). Nothing in Foundry's channel integration is billing. This still needs a rename or an explicit two-role definition.
 
 ### What Throttle is (and isn't)
 
-Throttle will be Epic's billing platform — a Stripe-style layer that issues invoices, processes subscriptions, and emits billing events. **It is not a system of record for users or organizations** — Clerk is, and stays so. Throttle's customer records are a downstream subscription view of the same orgs that already exist in Clerk + the local DB.
+Throttle is Epic's billing platform — a Stripe-style layer that issues invoices, processes subscriptions, and emits billing events. **It is not a system of record for users or organizations** — Clerk is, and stays so. Throttle's customer records are a downstream subscription view of the same orgs that already exist in Clerk + the local DB.
 
-### Customer-to-org mapping (canonical)
+### Environment and auth — the facts that cost time
 
-To avoid the three-source-of-truth problem (Clerk users, Throttle customers, local DB), the mapping is locked in upfront:
+Every one of these has produced a wrong conclusion in practice. None are guessable.
 
-- **One Throttle customer per Clerk Organization.** The local `Organization` row carries a `throttleCustomerId String? @unique` field reserving the link.
-- **Throttle has no concept of users.** Subscription state belongs to the org. Individual users don't have separate billing profiles. (If multi-user billing visibility is needed, that's a Throttle Dashboard role concern, not a Clerk-level identity concern.)
-- **Direction of trust:** the local DB is canonical for org existence; Throttle is canonical for subscription state. When an org is created, we provision a Throttle customer in the same transaction. When an org is closed, we cancel the Throttle customer.
-- **No customer record exists for users who aren't in any org.** Rules out a "personal billing profile separate from work account" model. Aligns with B2B SaaS norms.
+| Fact | Detail |
+|---|---|
+| **The API key selects the environment, not the host** | Sandbox and production share one host. There is no `sandbox.` prefix to check. The *only* way to know which environment you are talking to is which key you sent. |
+| **Nothing reads `*_LIVE_*` variable names** | Code reads `THROTTLE_API_KEY` / `THROTTLE_WEBHOOK_SECRET`. `_LIVE_` prefixes are labels for humans pasting values into the deploy dashboard — a var named `THROTTLE_LIVE_API_KEY` is read by nothing. Scripts that source a local env file hit **sandbox** unless handed the live key explicitly. |
+| **Auth header is `x-api-key`, not `Authorization: Bearer`** | A Bearer request returns **200 with an empty body** — which reads exactly like a successful query that found nothing. This is the single most misleading failure mode in the API. |
+| **Base path is `/api/v1`, not `/v1`** | — |
+| **Some write endpoints are `PATCH`, not `PUT`** | And the generated client omits request bodies from certain method signatures, so raw `fetch` is sometimes the only option. Verify against the live endpoint rather than the SDK types. |
+| **Cheap environment probe** | `GET /api/v1/subscriptions/<id>` with each candidate key — live rows 404 under a sandbox key. |
 
-This locks in **two** sources of truth (Clerk identity + Throttle billing) instead of three, with one-way provisioning from Org → Throttle.
+**Required env vars:** `THROTTLE_API_KEY`, `THROTTLE_WEBHOOK_SECRET`, `THROTTLE_APPLICATION_ID` (the application id is the same across environments).
 
-### Reserved schema
+### Customer-to-org mapping
 
-Add to `Organization` ahead of Throttle integration so activation is a code change, not a migration:
+The intended invariant is **one Throttle customer per Clerk Organization**, with the local `Organization` row carrying the pointer.
+
+- **Throttle has no concept of users.** Subscription state belongs to the org.
+- **Direction of trust:** the local DB is canonical for org existence; Throttle is canonical for subscription state.
+- **No customer record exists for users who aren't in any org.**
+
+> #### 🔴 The invariant does not hold under partner billing — design for that
+>
+> When a partner pays for multiple clients (§7 Path A), **every org that partner created shares ONE Throttle customer** — the partner's. The consequences are not cosmetic:
+>
+> - **`customer.externalId` can never identify the client org** on a partner-billed subscription. It identifies the *payer*. Any handler that maps customer → org will attribute all of a partner's clients to whichever org it resolves first.
+> - **Resolve the client through the checkout session or the subscription**, never through the customer, on any code path that can be partner-billed.
+> - **Invoice queries scoped by customer leak across clients.** Listing "this client's invoices" by customer id returns every client that partner pays for. This is a live, unfixed defect in Evident; treat it as a known trap, not a solved problem.
+>
+> Do not write code that assumes customer↔org is 1:1. It is 1:1 for self-serve orgs and 1:many for partner-billed ones.
+
+### Resolving the org from a webhook — required
+
+> **This is where the design-phase spec was most wrong, and it failed silently.** An early implementation read `externalCustomerId` off the subscription payload. Subscription webhooks **do not carry that field** — so every subscription event was dropped while the endpoint returned `200 OK`. Healthy logs, healthy dashboards, nothing recorded, for weeks.
+
+Two field names look interchangeable and are not:
+
+- **`externalId`** — the id *we* set when creating the customer (our `organizationId`). This is the one you want.
+- **`externalCustomerId`** — a per-connection mapping, **null for direct API use**. Not a substitute.
+
+Implement org resolution as an ordered fallback chain, and **log loudly and skip when every step misses** — never return a bare 200 on an unresolvable event:
+
+1. `data.customer.externalId` — the sibling customer object. *(Deliberately not `customer.externalCustomerId`.)*
+2. `externalCustomerId` on the subscription itself, if present.
+3. The local `Subscription` row, by `externalSubscriptionId`.
+4. Resolve `customerId → externalId` via an API call.
+
+Reference: `resolveOrganizationId` in `apps/api/src/modules/billing/throttle-webhook.controller.ts`, with `resolve-organization.spec.ts` as the contract test. **Copy the tests, not just the code** — this is the highest-value test file in the billing integration.
+
+### Event vocabulary (verified against live deliveries)
+
+The v3.6 stub guessed at this and got it wrong. There is **no `invoice.paid`**, **no `invoice.payment_failed`**, and **no `trial.ending` / `trial.expired`** — trial expiry is something the app schedules for itself (§8), not something Throttle announces.
+
+| Event | Maps to |
+|---|---|
+| `subscription.created` | `TRIALING` |
+| `subscription.activated` | `ACTIVE` |
+| `subscription.renewed` | `ACTIVE` — **this is the partner-commission trigger** |
+| `subscription.resumed` | `ACTIVE` |
+| `subscription.updated` | `ACTIVE` |
+| `subscription.plan_changed` | `ACTIVE` |
+| `subscription.paused` | `PAST_DUE` |
+| `subscription.past_due` | `PAST_DUE` |
+| `subscription.payment_failed` | `PAST_DUE` |
+| `subscription.cancelled` | `CANCELLED` — **spelled with two Ls** |
+| `payment.captured` | `ACTIVE` |
+| `payment.failed` | `PAST_DUE` |
+| `cart.abandoned` / `cart.expired` | recovery flows; carries `customer.externalId` |
+
+**Signature verification:** `verifyWebhookSignature` from `@usethrottle/webhook-types`, with a **5-minute replay window**. Verify before parsing; never trust the body.
+
+### Idempotency — `BillingEvent` (required)
+
+Webhook delivery is at-least-once. Persist every inbound event keyed on the provider event id **before** processing, and no-op on a duplicate:
 
 ```prisma
-model Organization {
-  // ... existing fields
-  throttleCustomerId  String?  @unique  // populated when Throttle integration ships
-}
-
 model BillingEvent {
-  // see §17.5 Throttle webhook stub — already reserved
+  id          String   @id @default(uuid())
+  externalId  String   @unique          // provider event id — the idempotency key
+  type        String
+  orgId       String?                   // resolved from payload; null when unresolvable
+  payload     Json
+  processedAt DateTime?
+  receivedAt  DateTime @default(now())
+
+  @@index([orgId, type])
 }
 ```
 
-### Reserved integration points
+Beyond replay safety this is the audit trail for "why did this org's status change" — worth having before the first billing dispute rather than after.
 
-This doc reserves integration points for:
+> **Evident divergence (open work, not a pattern to copy):** Evident has **no `BillingEvent` table** and **no `Organization.throttleCustomerId`**. It keeps billing state on `Subscription` (`externalSubscriptionId`, `agencyBillingOrgId`, `cardHandoffPendingAt`, `currentPeriodEnd`, `trialEndsAt`) and resolves the org per-event through the chain above. Storing the customer pointer would have made that chain unnecessary. **New apps: add both.**
 
-- Trial creation, expiration, and reminder emails (§8)
-- Trial-to-paid conversion detection and `Referral.convertedAt` updates (§7, §8)
-- **The full subscription lifecycle** — start trial, convert, upgrade, downgrade, cancel, reactivate, and the partner white-label ⇄ client-paid billing-model switch (§8 lifecycle table)
-- Partner commission calculation — 10% recurring on client-paid orgs, monthly accrual, paid month N+1 (§7)
-- **White-label partner invoicing at 80% of list** — the 20% discount netted at source for Path A orgs (§7)
-- Payout processing (PayPal Mass Pay direction; details in billing doc) (§7)
-- Subscription lifecycle webhook events (`subscription.changed`) (§12)
-- Dunning and payment failure handling (§11 — `billing.payment_failed` is transactional notification class)
-- Per-API-key request budget tier definitions (§22)
+### Known gap — no AVS on live authorizations
+
+The checkout payload carries email and name only — **no billing address** — and the hosted card embed collects number, expiry and CVV. Every live authorization therefore reaches the processor with **no AVS and no postal code**, which issuers and fraud rules decline at meaningfully higher rates. This has already produced an unexplained decline on a real conversion attempt.
+
+The checkout-session API exposes a `collect` field (`Record<string, any>`; one documented key is `collect: { shippingAddress: true }`). **Confirm the billing-address key with Throttle rather than guessing** — a wrong payload breaks checkout entirely. Until then, treat card declines on live conversions as plausibly environmental, not necessarily a bad card.
 
 ### Webhook flow (architectural decision)
 
-When Throttle ships, billing events flow as: **Throttle → app's `/webhooks/throttle` handler → app emits its own standardized event to customer-defined webhooks per §12.**
+Billing events flow: **Throttle → the app's `/webhooks/throttle` handler → the app emits its own standardized event to customer-defined webhooks per §12.**
 
-The app re-emits because:
-- Customers integrate with the app's domain events (e.g., `subscription.changed` with the org's data shape), not Throttle's internal event vocabulary.
-- The app can enrich (org context, plan tier names) and filter (only events the customer's webhook subscribed to).
-- Throttle credentials never reach customer endpoints.
+The app re-emits because customers integrate with the app's domain events, the app can enrich (org context, plan tier names) and filter, and Throttle credentials never reach customer endpoints.
 
-### Sections currently blocked on the billing doc
+### Still blocked / unbuilt
 
-- §7 Partner Program — commission calculation and payout flows
-- §8 Trials — conversion detection and expiration enforcement
-- §11 Notifications — `billing.payment_failed` semantics
-- §22 Rate Limiting — per-tier API key budgets
+Not blocked on Throttle existing any more — these are simply unbuilt:
 
-Until §23 is upgraded out of stub status, these features remain ⏸️ blocked. Schema reserves the relevant fields so activation is a code change, not a migration.
+- **Commission payout rails** — accrual and reporting are live (§7); moving money (payout method, tax forms, mass pay) exists nowhere.
+- **Buyer-portal add-card** and **cart-abandonment email**.
+- **Marketplace billing** for platform app stores, which bill on the platform's rails rather than Throttle's.
 
 ---
 
@@ -1415,7 +1680,7 @@ Shared events every app should emit (when applicable):
 
 - `org.created`, `org.updated`
 - `user.added`, `user.removed`
-- `subscription.changed` ⏸️ (when Throttle ships)
+- `subscription.changed` — re-emitted from the Throttle webhook per §23, never forwarded raw
 - `partner_seat.added` 🧭, `partner_seat.removed` 🧭
 
 App-specific events extend this list.
@@ -2063,7 +2328,7 @@ Or Redis `SETNX` with a TTL longer than the job's expected runtime. Either works
 
 Standard scheduled jobs every app may need:
 
-- Trial expiry sweep (when Throttle ships)
+- Trial expiry sweep — **with the §8 paid-into-the-future guard**
 - Webhook retry sweep
 - Deletion grace period sweep (§15.2)
 - Stale API key reminder (§13)
@@ -2261,39 +2526,11 @@ Customer-facing API routes ALWAYS go through `api.<domain>/api/v1/`. Admin-only 
 
 Out of scope for v3 standardization. App-by-app decision, no shared pattern, no mandatory commitment.
 
-### Throttle webhook stub (placeholder until billing doc lands)
+### Throttle webhook endpoint
 
-While Throttle integration is ⏸️ blocked, every app should reserve the webhook endpoint shape so adoption is a code change, not a schema migration:
+`POST /webhooks/throttle`, per-app, public, secured by signature verification rather than auth — the same shape as the Clerk webhook (§3.9).
 
-```ts
-// POST /webhooks/throttle (per-app endpoint, signed by Throttle)
-// Standard Throttle event shape (subject to confirmation in the billing doc):
-{
-  id: "evt_...",
-  type: "subscription.created" | "subscription.updated" | "subscription.canceled"
-      | "invoice.paid" | "invoice.payment_failed" | "trial.ending" | "trial.expired",
-  data: { /* Throttle resource snapshot */ },
-  occurredAt: "<ISO 8601>",
-}
-```
-
-Reserve a `BillingEvent` table to log inbound Throttle events for auditability before processing:
-
-```prisma
-model BillingEvent {
-  id          String   @id @default(uuid())
-  externalId  String   @unique          // Throttle event id (idempotency key)
-  type        String                    // Throttle event type
-  orgId       String?                   // resolved from event payload
-  payload     Json
-  processedAt DateTime?
-  receivedAt  DateTime @default(now())
-
-  @@index([orgId, type])
-}
-```
-
-This lets apps stub the webhook handler now (verify signature, persist event, no-op processing) and wire actual handlers when the billing doc arrives.
+**The real event vocabulary, signature verification, org-resolution chain, and the required `BillingEvent` idempotency table all live in §23.** Earlier revisions carried a guessed event shape here; it was wrong in ways that failed silently, so it has been removed rather than left to be copied.
 
 ---
 
@@ -2308,7 +2545,7 @@ Every public surface is rate-limited. Usage metrics are exposed so users see con
 | Surface | Limit | Notes |
 |---|---|---|
 | **Per-IP signup attempts** | 10 / hour | Blocks bot signup farms; doesn't friction real users. |
-| **Per-API-key request budget** | **Default for free / no-billing apps: 10,000 requests / hour per key.** Tier-based numbers come from the Throttle billing doc when it ships. | Apps without billing yet have a usable default; Throttle-driven tiers override when ready. |
+| **Per-API-key request budget** | **Default for free / no-billing apps: 10,000 requests / hour per key.** Plan-tier budgets are set per app off the subscription's plan tier. | Apps without billing keep the default; billed apps override per tier. |
 | **Per-org webhook deliveries (outbound)** | 1000 / minute baseline | Configurable higher for ecommerce-heavy customers. |
 | **Per-org Sentry error submission** | 1000 errors / minute | App-side cap on what we submit to Sentry — defends Sentry budget against runaway error loops in our own code. (Sentry has its own quota separately; this is upstream of that.) |
 | **Per-IP affiliate `/attribute`** | 30 / hour | Anti-fraud; blocks attribution farming. |
@@ -2490,7 +2727,7 @@ When bootstrapping the next app, replicate in this order:
 - [ ] **Seed script** with Futurama theme — `scripts/seed-test.ts` per §17.5
 - [ ] **WCAG 2.1 AA conformance** baseline per §17.5
 - [ ] **English-only** for v1 — no preemptive i18n wrapping per §17.5
-- [ ] **Throttle `BillingEvent` table reserved** + signed webhook stub per §17.5
+- [ ] **Throttle `BillingEvent` table** + signature-verified webhook handler per §23 — required, not reserved
 - [ ] **Secret rotation runbook** per §17.6 (annual cadence + compromise-driven)
 - [ ] **Integration test suite** for auth + core domain per §17.6 (CI gate)
 - [ ] **Shared library access** — `.npmrc` + `GITHUB_PACKAGES_TOKEN` for `@epic/*` packages per §17.6
@@ -2498,9 +2735,9 @@ When bootstrapping the next app, replicate in this order:
 ### Deferred (build when ready, schema reserves now)
 - [ ] **Outbound webhook infrastructure** per §12 — `Webhook` + `WebhookDelivery` models in initial schema even if not wired
 - [ ] **Partner program** per §7 — port from Foundry (shipped); `accountType` + `Referral.referralType` already in schema
-- [ ] **Trial period + Throttle integration** per §8 / §23 — separate billing standardization doc, integration points reserved
+- [ ] **Trial period + Throttle integration** per §8 / §23 — live contract; includes the paid-into-the-future expiry guard and the four-step org resolver
 
-### Required screens — auth / affiliate / partner / billing (v3.6)
+### Required screens — auth / affiliate / partner / billing (v3.7)
 
 The canonical screen inventory for the standardized functionality. Every app ships all of these (billing group ⏸️ until Throttle); "screen" includes dialogs that carry a full flow. This is the bulletproofing checklist for QA: each screen maps to API surfaces defined in its section, and a workflow test should walk each one as a brand-new user.
 
@@ -2523,17 +2760,19 @@ The canonical screen inventory for the standardized functionality. Every app shi
 **Partner / referral (§5, §7):**
 11. Settings → Partner Program — in-app application + application status (any user)
 12. Partner dashboard — Referrals tab · Seats tab · "Create trial for client" dialog · Team tab (⏸️) · Commissions tab (⏸️) · Profile/payout tab (⏸️)
-13. Promote-client-to-owner confirm flow (the Path B election)
+13. Promote-client-to-owner / handoff confirm flow (the Path B election) — must state that the client needs their own card and that the partner rate ends at renewal (§7 handoff rule 2)
 14. Settings → Partners (client side) — seats granted, permission-tier select, revoke
 15. Internal admin — partner application review queue (approve / reject)
 
-**Billing (§8, §23 — all ⏸️ until Throttle):**
+**Billing (§8, §23 — live; see §23 for the integration contract):**
 16. Settings → Billing — current plan, payment method, invoice history
 17. Trial state — countdown banner + upgrade CTA (admin shell)
 18. Plan picker — convert / upgrade / downgrade, with proration preview
 19. Cancel + reactivate flow — typed confirm, end-of-period notice
-20. Partner billing view — white-label client subscriptions invoiced at 80% of list, per-client model election (white-label ⇄ client-paid)
+20. Partner billing view — white-label client subscriptions invoiced at 80% of list, per-client model election (white-label ⇄ client-paid), with the commission-forfeit confirmation (§7 Path A rule 5)
 21. Dunning — payment-failed banner + `billing.payment_failed` transactional notification
+22. **Card-handoff banner** — persistent notice to a new owner after a white-label handoff that the partner's card is still on file and the next renewal will charge them or fail; clears via the acknowledge endpoint (§7 handoff rule 2)
+23. **Commission statement** — per-client basis and period, showing the uncapped basis where the §6 $500 cap bound. Reporting the basis is required even where no payout rail exists.
 
 Supporting infrastructure screens (support §10, notifications §11, API keys §13, activity §14, audit §14.5, webhooks §12) are enumerated in their own sections' "UI surfaces" blocks.
 
@@ -2551,7 +2790,7 @@ Supporting infrastructure screens (support §10, notifications §11, API keys §
 
 5. **Action is proof of attribution.** Partner-tier referral credit requires the partner to physically create the trial. No forms, no disputes.
 
-6. **Two referral tiers, one model — plus the partner election.** Both `affiliate` and `direct` referrals earn 10% recurring, no cap, on client-paid orgs. Partner status unlocks the partner dashboard, partner seats, the trial-creation flow, and a per-client election: stay white-label and take a 20% discount at source, or spin ownership to the client and take the 10% commission (§7). One client, one model, never both.
+6. **Two referral tiers, priced for two different acts.** An affiliate makes an introduction and is done: **100% of the referred org's first month, one time, capped at $500 per referral**, held 30 days (§6). A partner carries the relationship: **10% of every renewal, for the life of the subscription, no cap**, and nothing on the first payment (§7). Partner status additionally unlocks the dashboard, partner seats, the trial-creation flow, and a per-client election — stay white-label and take a 20% discount at source, or hand ownership to the client and take the 10%. **One client, one model, never both.**
 
 7. **Schema reserves the future.** `convertedAt`, `rewardStatus`, `accountType`, `Webhook`, `AuditLog`, `scopes` exist in the model even before billing/partner/scope code does. New apps copy them so the migration on activation is zero-schema.
 
@@ -2570,4 +2809,10 @@ Supporting infrastructure screens (support §10, notifications §11, API keys §
 14. **Rate-limit by default.** Every public endpoint and per-key access has a rate limit. Default deny, raise as needed. Usage metrics are visible to users so they see limits coming.
 
 15. **Transactional notifications bypass preferences.** Users can't opt out of deletion confirmations, security alerts, or payment failures. Compliance and account safety override convenience.
+
+16. **Silent success is the failure mode to design against.** The expensive bugs in this portfolio have not thrown errors — they reported success while doing nothing. A plan gate that never ran. An import that reported COMPLETED having imported nobody. A webhook that returned 200 on every event and recorded none. A sync endpoint that never checked its caller. Each looked healthy in logs and dashboards for weeks.
+
+    Design against it: **prefer a loud skip to a quiet pass.** When a code path declines to act, say so at `warn` with the identifiers needed to chase it. Every guard gets a test that asserts a **denial**, not just an allow. Any handler that can fail to resolve its subject logs the miss rather than returning 200. If a feature cannot be observed working, assume it is not.
+
+17. **Provider contracts are verified against live traffic, not against our own design docs.** Event names, field names, HTTP verbs, and auth headers described in a design-phase document are guesses until a real delivery confirms them — and a wrong guess here fails silently (§23 has three worked examples, including an auth header that returns `200` with an empty body). Before building on a provider's shape: capture one real payload, assert against it in a test, and record the verified vocabulary in the standard so the next app doesn't re-derive it.
 
