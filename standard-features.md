@@ -1,4 +1,4 @@
-# Epic Design Labs — Standard Features (v3.7)
+# Epic Design Labs — Standard Features (v3.8)
 
 **Canonical reference** for the foundational features every Epic Design Labs app should have. New apps adopt this whole stack so users get a consistent experience — same login, same org model, same affiliate program, same support widget — across the whole portfolio.
 
@@ -22,17 +22,27 @@
 
 **Reference implementation:** Foundry IMS (api: `Epic-Design-Labs/app-foundry-ims-api`, admin: `app-foundry-ims-admin`, marketing: `astro-foundryims`). Foundry is the most current implementation; if you find a better pattern, propose a standard update rather than diverging silently.
 
-**Document structure (v3.7):** sections are grouped into thematic parts; **§ numbers are stable identifiers and are no longer strictly sequential** (relocated sections keep their numbers so cross-references — including code comments citing them — stay valid).
+**Document structure (v3.8):** sections are grouped into thematic parts; **§ numbers are stable identifiers and are no longer strictly sequential** (relocated sections keep their numbers so cross-references — including code comments citing them — stay valid).
 
 - **Part I — Foundations:** §1 Overview · §2 Status Table + Foundry audit checklist
 - **Part II — Auth & Identity:** §3 Auth & Organizations · §4 Users & Roles · §5 Account Types · §16 Session Permission Re-Validation
 - **Part III — Affiliate Program:** §6
 - **Part IV — Referrals & Partner Program:** §7
-- **Part V — Billing (Throttle):** §8 Trials + subscription lifecycle · §23 Throttle Integration
+- **Part V — Billing (Throttle):** §8 Trials + subscription lifecycle · §23 Throttle Integration · §24 Plan Entitlements & Feature Gating
 - **Part VI — Communication & Support:** §9 Email · §10 Support · §11 Notifications
-- **Part VII — Platform Infrastructure:** §12 Outbound Webhooks · §13 API Keys · §14 Activity Log · §14.5 Audit Log · §15 Export & Deletion · §17 Sentry · §17.5 Operational Patterns · §22 Rate Limiting
+- **Part VII — Platform Infrastructure:** §12 Outbound Webhooks · §13 API Keys · §14 Activity Log · §14.5 Audit Log · §15 Export & Deletion · §17 Sentry · §17.5 Operational Patterns · §22 Rate Limiting · §25 Tenancy Enforcement
 - **Part VIII — Web Presence & Marketing:** §18 Marketing Site Contract · §19 Domain Conventions
 - **Part IX — Adoption & Governance:** §20 New-App Checklist + Required Screens · §21 Principles
+
+### Changes in v3.8
+
+**Theme: three places where this document asserted something that shipped experience contradicts.** Each is a demotion of an existing claim rather than a new feature area.
+
+- **§24 Plan Entitlements & Feature Gating — new.** The portfolio bills by tier, and until now the standard covered *who may act* (§4) and *what they pay* (§8/§23) but never the layer that turns a subscription state into an actual restriction. It separates **plan entitlement** ("your tier doesn't include this") from **tenant feature toggle** ("you turned this off") — different causes, different UI, different recovery, and a single field for both eventually tells a paying customer their own setting is a billing problem. Carries two 🔴 callouts: a no-op gate is indistinguishable from a working one (Evident's enforced nothing for months, green dashboards throughout), and **activating a gate on an existing customer base is a destructive operation** requiring a full audit of live accounts first — one customer would have been locked out of an account holding 4,700+ of their own records. Also stipulates that a 403 without UI to handle it is a dead end, not a paywall.
+- **§25 Tenancy Enforcement — new, and it supersedes PR review as the mechanism.** Principle 12 named manual review as the control for four revisions while the lint rule stayed unbuilt; in that time the same bug recurred **three times in one app**, the last after a dedicated audit had already fixed every Critical finding. Three repeats with review actively looking is evidence about the mechanism, not the reviewers — an absent clause is precisely what review is worst at catching. The standard is now **default-deny at run time**: unscoped queries on org-owned tables fail, cross-org work uses an explicit greppable annotation, and a completed audit is evidence about the past rather than a property the codebase holds. Principle 12 rewritten to match.
+- **§17.5 gains a background-worker testing floor.** The testing standards described the API, while the code that revokes access and moves money runs on a timer in a different service. **Any job that can revoke access, delete data, or move money needs a test, and the service running it needs a harness** — Evident's worker has no jest config and no test script, and that is where its trial-expiry cron lives. Tests must cover **who the job skips**, not just who it acts on, and a production dry run is not a substitute.
+- Every guard now needs a **denial-asserting test** (§17.5, §4, §24.2) — an allow-only test cannot distinguish a working guard from an unregistered one.
+- **Scope note on app marketplaces:** only **Foundry and Throttle** will host third-party app marketplaces. Every other app, Evident included, has internally-built integrations only — so the app-marketplace gap in the v3.6 list is a two-app concern, not a portfolio standard.
 
 ### Changes in v3.7
 
@@ -101,7 +111,7 @@ Two things at once: a **reality refresh** against the shipped Foundry repos (202
 - **Divergence callouts added** (each needs a decision — amend the standard or file the gap as work): §3.3/§3.9 org auto-provisioning unimplemented on both ends; §3.6 per-request Clerk-metadata push not implemented and contraindicated by a Foundry perf incident; §3.9 webhook handler returns 200 on processing errors rather than 5xx; §4 MEMBER aliased to full ADMIN permissions and VIEWER granted `support.write`; §11 notification schema is org-scoped with no per-user rows, audience, or transactional tier; §12 delivery contract uses `x-foundry-*` headers with no dead-letter state and no dual-signing on customer endpoints; §14 ActivityLog deliberately denormalizes `userEmail` (tension with principle 11); §17 no PII redaction shipped; §17.5 health-check shape differs and DB failure doesn't 503; §18.4 no cookie consent shipped.
 - **§23 flag:** "Throttle" now names two things — the still-unbuilt billing platform this doc assumes, and the shipped THROTTLE sales-channel platform Foundry integrates with (Foundry serves catalog; Throttle owns checkout/orders). Needs a naming/priority decision next revision.
 - Checklist items completed since v3.3 are checked off with completion notes; items done differently than specified are annotated rather than silently reworded.
-- Known doc gaps for a future revision (Foundry shipped these with no standard): MCP server + first-party OAuth, app marketplace, accounting integrations (QuickBooks live, Xero planned), headless storefront API (storefront-scoped keys + per-channel webhooks), public API docs, n8n / hosted-SFTP integrations.
+- Known doc gaps for a future revision (Foundry shipped these with no standard): MCP server + first-party OAuth, app marketplace *(v3.8 scope note: **Foundry and Throttle only** — every other app has internally-built integrations, so this is not a portfolio standard)*, accounting integrations (QuickBooks live, Xero planned), headless storefront API (storefront-scoped keys + per-channel webhooks), public API docs, n8n / hosted-SFTP integrations.
 
 ### Changes in v3.5
 
@@ -282,6 +292,10 @@ The exceptions are **shared libraries** (e.g., `@epic/disposable-emails`, `@epic
 | Rate limiting | 🚧 | Foundry runs a custom in-memory fixed-window limiter (per ECS task): 300/min per ADMIN API key + per-endpoint storefront limits, with `X-RateLimit-*`/`Retry-After` headers. No Redis, no per-IP signup limit, no usage endpoints — see §22 Foundry status. |
 | Health checks | 🚧 | Foundry has `/health` but not the standardized shape: no `checks` object, DB failure returns 200 "degraded" rather than 503 — see §17.5 Foundry status. |
 | Cron conventions | 🚧 | 26 jobs live via `@nestjs/schedule`; no advisory locks / Redis SETNX anywhere — single-task-safe only. See §17.5 Foundry status. |
+| Plan entitlement gate | 🚧 | §24. Live and correct in Evident; **the 403 has no UI anywhere** so it currently renders as a generic error. Gate was a silent no-op for months before that. |
+| Tenant feature toggles | ✅ Evident | Per-tenant on/off, modelled separately from plan entitlement (§24.1); nav hides disabled groups. |
+| Tenancy: default-deny data layer | 🧭 | §25. **Not built anywhere.** Supersedes PR review as the mechanism — that mechanism let the same bug through three times in one app. |
+| Background-worker test harness | 📋 | §17.5. Required where a job can revoke access, delete data, or move money. Evident's worker has **no jest config and no test script**; the trial-expiry cron lives there. |
 | Custom fields | ✅ | Per-entity custom field defs + values. |
 
 ### Foundry audit checklist (work to align reference impl with v3)
@@ -311,6 +325,10 @@ Statuses synced to the shipped repos 2026-08-23 (api v3.54.x).
 - [ ] **New (v3.7):** audit for `@Public()` on controller *classes* — it disables every other guard on the controller (§4)
 - [ ] **New (v3.7):** add a denial-asserting test for every guard; an allow-only test cannot distinguish a working guard from a no-op (§4)
 - [ ] **New (v3.7):** add the `BillingEvent` idempotency table per §23 *(exists in no app, Evident included)*
+- [ ] **New (v3.8):** implement the plan entitlement gate per §24, with the §24.3 live-account audit run **before** activation and the §24.4 upgrade prompt shipped **first**
+- [ ] **New (v3.8):** separate plan entitlement from tenant feature toggles per §24.1 if they currently share a field
+- [ ] **New (v3.8):** build the default-deny tenancy layer per §25 *(supersedes the long-open `@epic/eslint-plugin-tenancy` item — the lint rule is now a secondary signal, not the control)*
+- [ ] **New (v3.8):** give the worker/scheduler service a test harness and cover every access-revoking or money-moving job, **including its skip cases**, per §17.5
 - [ ] Build backup runbook documenting 30-day expiry + deletion-rerun-on-restore per §15.2
 - [ ] Set up 7-year audit-log cold-storage infrastructure per §14.5
 - [x] Convert Stackbe → fully-on-Clerk *(done 2026-05-23; Stackbe fully removed)*
@@ -1389,6 +1407,73 @@ Not blocked on Throttle existing any more — these are simply unbuilt:
 
 ---
 
+## 24. Plan Entitlements & Feature Gating 🚧
+
+**Every app in the portfolio bills by tier, so every app needs a gate that turns a subscription state into an actual restriction.** Until v3.8 this document specified who may act (§4 RBAC) and what they pay (§8, §23) but never the layer in between. That layer is where the most dangerous class of bug in this portfolio lives, because both of its failure modes are invisible: a gate that never runs lets everyone through, and a gate that runs too eagerly locks out paying customers.
+
+### 24.1 Two axes that are not the same thing
+
+These get conflated constantly. They have different causes, different UI, and different recovery, and an app that models them as one field will eventually tell a paying customer their own setting is a billing problem.
+
+| | **Plan entitlement** | **Tenant feature toggle** |
+|---|---|---|
+| Question it answers | "Does their tier include this?" | "Do they want this on?" |
+| Set by | Us, via the subscription's plan tier | The customer, in settings |
+| Reason it's off | They haven't paid for it | They chose to turn it off |
+| Correct UI | Visible but locked, with an upgrade path | Hidden entirely |
+| How they fix it | Upgrade | Flip the switch back |
+| Server response | `403` with an upgrade code | `404`/empty — the feature isn't part of this tenant's app |
+
+**Rules:**
+
+- Model them as **separate fields**. Never a single `featuresEnabled` blob that both billing and the customer write to.
+- **Entitlement is checked first.** A customer cannot toggle on something their tier doesn't include, and turning a feature off must never look like a downgrade.
+- **A toggle is not a licence.** Toggling a feature off does not entitle a refund or a tier change, and toggling it back on must not require re-purchase.
+
+### 24.2 The gate
+
+- **One tier→feature map, as data, in shared code** — read by the server guard *and* the client. If the sidebar computes entitlement differently from the API, you ship a nav item that 403s.
+- **The gate fails closed.** An unknown tier grants the lowest feature set, never the highest.
+- **The gate is a guard, so §4's registration hazards apply in full.** Where guard ordering is significant, the plan gate usually has to run *after* identity resolution and therefore must be registered where that ordering holds — moving its registration to a different module leaves it instantiated, injected, and enforcing nothing.
+- **Every gate needs a test that asserts a denial.** See §21 principle 16 and §4.
+
+> 🔴 **A plan gate that is a no-op looks exactly like a plan gate that is working.** Evident's shipped for months while enforcing nothing — every request passed, no error was raised, and the dashboards were green. It was discovered by trying to hit a gated endpoint on a free account by hand, not by any alarm. **Verify a new gate by attempting a gated action on an under-entitled account and confirming the 403.** Until you have seen the denial, you have not shipped a gate.
+
+### 24.3 🔴 Activating a gate on an existing customer base
+
+**Turning a gate on is a destructive operation against live accounts, and it must be treated as one.** The gate is correct code; the customer data is what's wrong. Every long-lived org predates the tiering and carries whatever state it happens to have.
+
+Two specific traps, both of which have produced a near-miss lockout:
+
+1. **An org with no subscription row at all falls back to the lowest tier.** Every account created before billing existed is in this state. Activating the gate silently strips features from customers who have been using them for a year. The fallback tier for a missing row is a load-bearing choice, not a default to pick casually — write it down and justify it.
+2. **A stale provider status locks out a paying customer.** Same root cause as the §8 expiry-sweep guard: an account that is paid up can carry a `trialing` or `expired` local status. Gating on status alone acts on data you already know can be wrong.
+
+**Required before merging a change that activates or tightens a gate:**
+
+- **Audit every live org against the new gate** and produce the list of accounts that would lose access. Not a spot check — the full list.
+- **Reconcile that list to zero, or make each remaining entry a deliberate, recorded decision.** An account you intend to lock out is fine; an account you didn't know about is an outage.
+- **Ship the 403-handling UI first** (§24.4). Activating a gate before anything handles its response converts a paywall into a dead end.
+
+> Evident's plan gate sat merged-but-unactivated for weeks specifically so this audit could happen. One customer would have been locked out of an account holding 4,700+ of their own records. The delay was the correct call.
+
+### 24.4 The 403 must have a destination
+
+A gate that returns `403` and no UI that handles it is a broken product, not a paywall — the customer sees a generic error on a feature they can legitimately buy.
+
+- The gate returns a **distinguishable code** (e.g. `plan_required`) plus the tier that would satisfy it. A bare 403 is indistinguishable from a permissions failure and gets routed to the wrong support queue.
+- The client renders an **upgrade prompt naming the required tier**, linking to the plan picker (§20 screen 18).
+- Gated nav is **visible but locked**, not hidden. Hiding it means the customer never learns the feature exists, which defeats the point of tiering.
+
+> **Known gap (Evident):** no UI handles the plan-gate 403 today. The gate is live and correct; the customer-facing half of it isn't built.
+
+### 24.5 Downgrade, expiry, and data
+
+- **Gating restricts access. It never deletes data.** A downgraded or expired org keeps everything; it just can't reach some of it. Deletion happens only through §15.
+- **Re-entitlement is immediate and complete.** Paying restores access to the untouched data — no re-import, no re-configuration.
+- Retention while gated follows §15's rules, not the gate's.
+
+---
+
 # Part VI — Communication & Support
 
 ## 9. Email Infrastructure (Resend + react-email)
@@ -2328,7 +2413,7 @@ Or Redis `SETNX` with a TTL longer than the job's expected runtime. Either works
 
 Standard scheduled jobs every app may need:
 
-- Trial expiry sweep — **with the §8 paid-into-the-future guard**
+- Trial expiry sweep — **with the §8 paid-into-the-future guard**, and a test covering its skip cases (§17.5)
 - Webhook retry sweep
 - Deletion grace period sweep (§15.2)
 - Stale API key reminder (§13)
@@ -2495,6 +2580,22 @@ Every app has, at minimum:
 - **No coverage target imposed by the standard.** Apps set their own per-domain coverage based on risk. The standard's only requirement is that the auth + RBAC paths are covered; everything else is per-app judgment.
 - **CI runs the integration suite on every PR.** Failing tests block merge.
 - **No global mocking of Clerk in tests.** Use Clerk's test JWTs or a per-test mock at the boundary; mocking the entire `ClerkGuard` defeats the purpose.
+- **Every guard has a test that asserts a *denial*.** An allow-path-only test cannot distinguish a working guard from one that was never registered (§4, §24.2).
+
+#### 🔴 Background workers and scheduled jobs (v3.8 — stipulated)
+
+**Any job that can revoke access, delete data, or move money requires a test, and the service that runs it requires a test harness.**
+
+This is stated separately because the standard's testing requirements have until now described the API, while the highest-consequence code in these apps runs somewhere else entirely. A scheduler that flips subscription statuses can lock a paying customer out of their account, and it does so on a timer, at night, with no user watching and no request to trace.
+
+The failure mode is structural rather than careless. A worker service starts life as "just a queue consumer," gets no test setup because there is nothing to test yet, and by the time it owns billing enforcement the absence of a harness has stopped being visible — nobody is choosing not to write tests, there is simply nowhere to put them. Evident's worker has **no jest config and no test script**, and that is where its trial-expiry cron lives.
+
+**Minimum bar:**
+
+- The worker service has a test harness, even if it starts with one test.
+- Every job matching the criteria above has a test covering **who it acts on and, more importantly, who it must skip**. The skip cases are the ones that cause incidents (§8's paid-into-the-future guard is exactly such a case).
+- Jobs are structured so the selection logic is callable independently of the schedule. A job whose query can only be exercised by waiting for a cron cannot be tested.
+- **A production dry run is not a substitute for a test.** It proves the job's behaviour against today's data only, and the data is the part that changes.
 
 ### Shared library packaging
 
@@ -2566,6 +2667,46 @@ This is a deliberate operational stance: **rate-limit transparently, not silentl
 
 - **Default library: `@upstash/ratelimit`** with the Upstash Redis backend (or self-hosted Redis if the app already runs one). Edge-friendly, distributed, simple sliding-window primitive. Apps free to substitute (`express-rate-limit + rate-limit-redis`, fastify-rate-limit, etc.) if they have a load-bearing reason — but document the divergence.
 - 429 responses include `Retry-After` headers and structured error bodies (`{ error: "rate_limited", retryAfter: <seconds>, limit, remaining: 0 }`).
+
+---
+
+## 25. Tenancy Enforcement 🧭 (v3.8 — supersedes "PR review" as the mechanism)
+
+### Why this is now its own section
+
+Principle 12 has said since v3 that every query filters by org and that **PR review is the enforcement mechanism** until a lint rule ships. That position is no longer tenable, and this section exists to record why rather than quietly leaving the principle in place.
+
+- The lint rule (`@epic/eslint-plugin-tenancy`) has been 🧭 *not built* across four revisions.
+- In the meantime **the same class of bug has recurred three separate times in a single app** — most recently in Evident's loyalty module, after a dedicated tenancy audit had already run and fixed every Critical finding.
+
+Three repeats in one codebase, with review actively looking for it, is evidence about the mechanism rather than about any individual review. **A control that depends on a human noticing an absent clause does not scale to every query, forever.** The absence is the bug, and absences are exactly what review is worst at catching — there is no wrong line to spot, only a missing one.
+
+This is also the §21 principle 16 shape: an unscoped query does not error. It returns *more* rows, cheerfully, and the app renders them.
+
+### The standard
+
+**Default-deny at the data layer.** A query against an org-owned table that does not carry a tenant scope must **fail**, not succeed broadly. Enforcement moves from review-time to run-time.
+
+Required properties:
+
+1. **Org-owned tables are declared**, once, in one place. Everything else is global by declaration rather than by omission.
+2. **A query on a declared table without the tenant key throws** — in development and in production alike. A dev-only check trains people to write unscoped queries and discover it at 3am.
+3. **Cross-org operations get an explicit, greppable escape hatch** — a named annotation that says "this is deliberately cross-org," never a silent pass. GDPR sweeps, admin tooling, and "list this person's memberships" are legitimate and rare. `grep` for the annotation should return a short list a person can read in one sitting.
+4. **The escape hatch is auditable.** Every use is reviewable on its own merits, which is what review is actually good at — judging a small number of deliberate exceptions rather than policing every query.
+5. **Raw SQL is covered or explicitly excluded, in writing.** An ORM-level layer does not see raw queries. If raw SQL is exempt, say so and keep the manual review obligation scoped to that slice — a much smaller surface than "all queries."
+
+**Implementation direction:** a Prisma client extension is the natural home — it sits under every call site, needs no per-query cooperation, and cannot be forgotten by a new file. A lint rule remains useful as a fast local signal but must not be the primary control: it sees static queries only, and the failures so far have not all been static.
+
+**Postgres RLS remains the long-term hardening layer**, below the application entirely. It is the strongest form of this control and the most work; the client extension is the version that can ship this quarter.
+
+### Until it ships
+
+The manual obligation stands, and is now narrower and more specific than "review carefully":
+
+- **Any `find*` / `update*` / `delete*` on an org-owned table with no tenant key in the where-clause is a bug**, not a style note — including `findUnique` by a globally unique id, which is the most common way this slips through. A globally unique id proves the row exists; it does not prove the caller may see it.
+- **Permission checks scope by `(clerkUserId, orgId)`, never `clerkUserId` alone** (§3.5). A multi-org user's rows in *other* orgs are returned by the unscoped version, and permissions leak with them.
+- **New modules are the highest-risk surface.** Every recurrence so far arrived with a new feature, not with a change to an audited one. A tenancy audit is a snapshot; it does not cover code written after it.
+- Treat a completed tenancy audit as **evidence about the past**, never as a property the codebase now holds.
 
 ---
 
@@ -2728,6 +2869,10 @@ When bootstrapping the next app, replicate in this order:
 - [ ] **WCAG 2.1 AA conformance** baseline per §17.5
 - [ ] **English-only** for v1 — no preemptive i18n wrapping per §17.5
 - [ ] **Throttle `BillingEvent` table** + signature-verified webhook handler per §23 — required, not reserved
+- [ ] **Plan entitlement gate** per §24 — one tier→feature map in shared code, fails closed, denial-asserting test, `plan_required` 403 with an upgrade prompt behind it
+- [ ] **Tenant feature toggles** modelled separately from plan entitlement per §24.1
+- [ ] **Default-deny tenancy layer** per §25 — new apps get this from day one rather than retrofitting it after the third incident
+- [ ] **Worker test harness** per §17.5 — set up with the first scheduled job, not after it owns billing
 - [ ] **Secret rotation runbook** per §17.6 (annual cadence + compromise-driven)
 - [ ] **Integration test suite** for auth + core domain per §17.6 (CI gate)
 - [ ] **Shared library access** — `.npmrc` + `GITHUB_PACKAGES_TOKEN` for `@epic/*` packages per §17.6
@@ -2774,6 +2919,10 @@ The canonical screen inventory for the standardized functionality. Every app shi
 22. **Card-handoff banner** — persistent notice to a new owner after a white-label handoff that the partner's card is still on file and the next renewal will charge them or fail; clears via the acknowledge endpoint (§7 handoff rule 2)
 23. **Commission statement** — per-client basis and period, showing the uncapped basis where the §6 $500 cap bound. Reporting the basis is required even where no payout rail exists.
 
+**Plan gating (§24):**
+24. **Upgrade prompt** — what a `plan_required` 403 renders as: names the required tier, links to the plan picker. **Ship this before activating any gate** (§24.3); a gate without it is a dead end, not a paywall.
+25. **Locked feature state** — gated nav and entry points are visible but locked, never hidden. Hiding them means the customer never learns the feature exists.
+
 Supporting infrastructure screens (support §10, notifications §11, API keys §13, activity §14, audit §14.5, webhooks §12) are enumerated in their own sections' "UI surfaces" blocks.
 
 ---
@@ -2802,7 +2951,7 @@ Supporting infrastructure screens (support §10, notifications §11, API keys §
 
 11. **Privacy and deletion are first-class.** Right-to-deletion is built in, not bolted on. PII is in nullable fields only. Activity logs reference user IDs, not emails. Audit logs use HMAC for any necessary email hashes. Backups have documented 30-day retention with deletion-rerun-on-restore.
 
-12. **Defense in depth on tenancy.** Every query filters by `orgId`. Every API request is scoped to the caller's active org. **PR review checklist** treats unscoped `find*`/`update*`/`delete*` on org-owned tables as a bug. The future tool is **`@epic/eslint-plugin-tenancy`** (custom ESLint rule using TypeScript AST + Prisma schema introspection to flag unscoped queries on org-owned tables) — 🧭 not built yet. Until it ships, manual review is the enforcement mechanism. Postgres RLS as a future hardening layer.
+12. **Defense in depth on tenancy — enforced by the data layer, not by review.** Every query filters by `orgId`; every API request is scoped to the caller's active org. **PR review is no longer the stated mechanism** — it was, for four revisions, and the same bug recurred three times in one app anyway. The standard is now **default-deny at run time**: an unscoped query on an org-owned table fails, and genuine cross-org operations use an explicit, greppable annotation. See **§25**. Postgres RLS remains the long-term hardening layer.
 
 13. **PII boundaries are explicit.** No PII in Sentry tags, URL paths, log lines, or aggregate analytics. PII lives in `User`, `Organization`, and explicit snapshot fields only.
 
