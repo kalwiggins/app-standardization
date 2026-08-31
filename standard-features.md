@@ -296,15 +296,15 @@ The exceptions are **shared libraries** (e.g., `@epic/disposable-emails`, `@epic
 | Partner role / `accountType` | ✅ | `User.accountType` live; toggled on application approval; pushed to Clerk `publicMetadata` on change (not per-request — see §3.6). |
 | Partner dashboard + partner seats | ✅ | Referrals/Seats/Team/Settings tabs, "Create trial for client" dialog, profile + payout settings, team seat assignments + `autoAssignAll` (§7), client-side per-seat tier control. Commissions endpoints still ⏸️ billing; assignment *enforcement* deferred with them. |
 | Partner-created trials (direct referral) | ✅ | `POST /partner/trials` + `referralType: "direct"` + daily abandoned-trial cleanup cron. |
-| Trial period / `trialEndsAt` | ✅ Evident · ⏸️ Foundry | Live in Evident with the §8 expiry guard. Foundry has only an `isPartnerTrial` boolean — the reserved fields (§3.5, §23) were never added. |
+| Trial period / `trialEndsAt` | ✅ Evident · 🚧 Foundry | Live in Evident with the §8 expiry guard. Foundry reserved the fields 2026-08-31 (api v3.69.0: `Organization.status`/`trialEndsAt`/`throttleCustomerId`, existing orgs backfilled `active`); no lifecycle reads them yet. |
 | Trial-expiry sweep safety guard | 🚧 | **Required** (§8): never expire a subscription paid into the future; log skipped rows loudly. Implemented in Evident after it nearly locked out a paying customer. Not present anywhere else; no test harness on the worker that runs it. |
 | Conversion detection (`Referral.convertedAt`) | ✅ Evident · ⏸️ Foundry | Written from the subscription-activation webhook. |
 | Commission accrual + reporting | ✅ Evident | Affiliate 100%-of-first-month capped $500 (§6); partner 10% of renewals, no cap (§7). Rates in one shared constants module. |
 | Commission **payout** rails | ⏸️ | Accrual and reporting exist; nothing moves money. No payout method, tax forms, or mass-pay anywhere. Do not imply to partners that a reported commission has been paid. |
 | Pay-for-client (white-label) checkout | ✅ Evident | 20% discount at source. Five required mechanics in §7 Path A — all five were written after a production failure. |
 | Handoff (white-label → client-paid) | ✅ Evident | Six required mechanics in §7 Path B. 🔴 The payment method does **not** move; `cardHandoffPendingAt` + banner + acknowledge endpoint are required. |
-| Throttle webhook contract | ✅ Evident | Verified event vocabulary, signature + 5-min replay window, four-step org resolution (§23). The v3.6 guessed vocabulary was wrong and failed silently. |
-| `BillingEvent` idempotency log | 📋 | Required by §23; **exists in no app**, Evident included. Webhook delivery is at-least-once. |
+| Throttle webhook contract | ✅ Evident · ✅ Foundry | Verified event vocabulary, signature + 5-min replay window, four-step org resolution (§23). The v3.6 guessed vocabulary was wrong and failed silently. Foundry receiver live 2026-08-31 (api v3.69.0), `resolve-organization.spec.ts` ported verbatim; `cart.expired` is retired upstream (rejected at endpoint registration). |
+| `BillingEvent` idempotency log | ✅ Foundry · 📋 elsewhere | Required by §23; Foundry shipped the first one 2026-08-31 (api v3.69.0, persist-before-process, unique on provider event id with body-hash fallback). Evident still lacks it. Webhook delivery is at-least-once. |
 | Billing-address / AVS collection | 🚧 | Checkout sends no billing address, so live authorizations reach the processor with no AVS or postal code — an unexplained decline risk. Blocked on confirming the `collect` field shape with Throttle (§23). |
 | Support (Dispatch Tickets) | ✅ | Tickets scoped per-org via tag, third-party API wrapped server-side. |
 | Transactional email (Resend) | 🚧 | Foundry uses Resend with inline HTML for PO send/follow-up. v3 standardizes `react-email`. Migration required. |
@@ -333,7 +333,7 @@ The exceptions are **shared libraries** (e.g., `@epic/disposable-emails`, `@epic
 
 ### Foundry audit checklist (work to align reference impl with v3)
 
-Statuses synced to the shipped repos 2026-08-31 (api v3.68.0).
+Statuses synced to the shipped repos 2026-08-31 (api v3.69.0).
 
 - [x] Drop `User.clerkUserId @unique` constraint, add `@@index([clerkUserId])` to support multi-org users *(done — nullable + indexed, `20260503143134_user_tombstone_fields`)*
 - [x] Make `User.email`, `User.name`, `User.clerkUserId` nullable for tombstoning per §3.5 *(done, same migration)*
@@ -354,10 +354,10 @@ Statuses synced to the shipped repos 2026-08-31 (api v3.68.0).
 - [x] Update marketing-site cookie capture script to use `Domain=.foundryims.com` per §18.2 *(done)*
 - [x] Remove the URL-bridge link rewriting from `astro-foundryims/src/layouts/Layout.astro` *(done)*
 - [x] ~~Add `user.created` org auto-provisioning per §3.9~~ *(withdrawn in v3.9 — `user.created` is mirror-only by design; org creation is Clerk-native per §3.3)*
-- [ ] Migrate from current billing (whatever is in place) to Throttle per §23 — **no longer blocked; Throttle is live.** Start from Evident's `billing/` + `throttle/` modules and copy `resolve-organization.spec.ts` verbatim
+- [ ] Migrate from current billing (whatever is in place) to Throttle per §23 — **Phase 1 shipped 2026-08-31** (api v3.69.0: schema + webhook receiver + `BillingEvent`; `resolve-organization.spec.ts` copied verbatim as instructed). Remaining: checkout/lifecycle, conversion, commissions — blocked on the plan/pricing decision, not on Throttle
 - [x] **New (v3.7):** audit for `@Public()` on controller *classes* (§4) *(done 2026-08-31 — eliminated across 10 storefront controllers via `@SkipSessionAuth`, route-level-only enforcement in both guards, and a CI source-scan spec that fails the build on recurrence)*
 - [x] **New (v3.7):** add a denial-asserting test for every guard (§4) *(done for the auth-critical set 2026-08-31: ClerkGuard, PermissionGuard, StorefrontAuthGuard, feature-toggle guard, plus the §4 role-mapping contract spec)*
-- [ ] **New (v3.7):** add the `BillingEvent` idempotency table per §23 *(exists in no app, Evident included)*
+- [x] **New (v3.7):** add the `BillingEvent` idempotency table per §23 *(done 2026-08-31, api v3.69.0 — first app to have one; Evident still lacks it)*
 - [ ] **New (v3.8):** implement the plan entitlement gate per §24, with the §24.3 live-account audit run **before** activation and the §24.4 upgrade prompt shipped **first**
 - [ ] **New (v3.8):** separate plan entitlement from tenant feature toggles per §24.1 if they currently share a field
 - [ ] **New (v3.8):** build the default-deny tenancy layer per §25 *(supersedes the long-open `@epic/eslint-plugin-tenancy` item — the lint rule is now a secondary signal, not the control)*
@@ -368,7 +368,7 @@ Statuses synced to the shipped repos 2026-08-31 (api v3.68.0).
 - [ ] PR-review enforcement of tenancy-scoped queries until `@epic/prisma-tenancy-lint` ships per §21.12 *(ongoing; 2026-07 tenancy audit fixed all Critical findings — Important/Minor and the raw-SQL slice remain)*
 - [ ] **Schema audit deliverable:** produce a diff document comparing Foundry's `prisma/schema.prisma` against the baseline schemas in §3.5 (Org/User), §6 (Referral), §7 (PartnerSeat / PartnerSeatAssignment), §11 (Notification with `audience` + `deliveryClass`, NotificationPreference per-method), §12 (Webhook + WebhookDelivery with secret rotation fields), §13 (ApiKey with `expiresAt` + `scopes`), §14 (ActivityLog with `partnerSeatId` + standard `source` values), §14.5 (AuditLog with `partnerSeatId`), §15.2 (DataDeletionRequest, DataDeletionAudit). One doc, one PR, ratified *(the 2026-08-23 drift report is a working input, not the ratified deliverable)*
 - [x] Drop `User.affiliateCode` column once per-org migration completes *(done — same migration as the per-org move)*
-- [ ] **New (v3.6):** reserve the billing schema per §23 — `Organization.trialEndsAt`, `Organization.status`, `Organization.throttleCustomerId`, `BillingEvent` table *(none exist today; trial state is a lone `isPartnerTrial` boolean)*
+- [x] **New (v3.6):** reserve the billing schema per §23 — `Organization.trialEndsAt`, `Organization.status`, `Organization.throttleCustomerId`, `BillingEvent` table *(done 2026-08-31, api v3.69.0; existing orgs backfilled `status='active'`, nothing gates on it yet pending §24.3)*
 - [ ] **New (v3.6):** decide + implement cookie consent per §18.4 *(nothing shipped; Ahrefs analytics currently loads unconditionally)*
 - [ ] **New (v3.6):** verify account deletion scrubs `ActivityLog.userEmail` (and any other denormalized email snapshots) per §14/§15.2
 
@@ -1412,9 +1412,9 @@ The v3.6 stub guessed at this and got it wrong. There is **no `invoice.paid`**, 
 | `subscription.cancelled` | `CANCELLED` — **spelled with two Ls** |
 | `payment.captured` | `ACTIVE` |
 | `payment.failed` | `PAST_DUE` |
-| `cart.abandoned` / `cart.expired` | recovery flows; carries `customer.externalId` |
+| `cart.abandoned` | recovery flows; carries `customer.externalId`. **`cart.expired` is retired** — endpoint registration rejects it (returned in `retiredEventsIgnored`, verified 2026-08-31) |
 
-**Signature verification:** `verifyWebhookSignature` from `@usethrottle/webhook-types`, with a **5-minute replay window**. Verify before parsing; never trust the body.
+**Signature verification:** `verifyWebhookSignature` from `@usethrottle/webhook-types`, with a **5-minute replay window**. Verify before parsing; never trust the body. ⚠️ That package is **ESM-only** and cannot be `require`d from a CJS runtime (NestJS default) — keep it as a types-only dependency and implement the check locally: HMAC-SHA256 of `` `${t}.${rawBody}` `` against the `v1=` value from `X-Throttle-Signature: t=<unix>,v1=<hex>` (Foundry's `throttle-signature.ts`, with test vectors).
 
 ### Idempotency — `BillingEvent` (required)
 
