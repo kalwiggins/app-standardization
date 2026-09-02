@@ -63,7 +63,8 @@
 - **§14.5** gains the platform-level-events convention: global staff actions (e.g. disposable overrides) log to the acting staff member's org with a self-describing `resource`, rather than inventing an org-less audit store.
 - **§16** status 🚧→✅ (Foundry ships the 401 + client handling).
 - **§18.3** conversion pages: Foundry's `/signup` + `/welcome` are now noindex and sitemap-excluded.
-- §2 status table + Foundry audit checklist synced to api v3.68.0 / admin (2026-08-31).
+- **§25** gains a second implementation's field notes and a **model-promotion recipe**. Evident shipped the layer 2026-09-01 (#221) and settled four things the first build did not record: `include`d relations do not fire the extension (which is what *defines* the coverage boundary for tenant-column-less child models); the offending call site is **not** recoverable from a stack walk, because extension callbacks are dispatched across `PrismaPromise.then`; static scanning does work, given two named false-negative traps; and a baseline file is what turns report mode into a ratchet rather than a hope. Also records the choice to tier the burn-in **by model rather than by environment**, which keeps property 2 ("in development and in production alike") literally true during rollout.
+- §2 status table + Foundry audit checklist synced to api v3.68.0 / admin (2026-08-31); Evident rows synced 2026-09-01 (§14, §14.5, §24, §25, §12).
 
 ### Changes in v3.8
 
@@ -311,9 +312,9 @@ The exceptions are **shared libraries** (e.g., `@epic/disposable-emails`, `@epic
 | Notification center (in-app bell + dropdown) | ✅ | Bell icon (unread dot, no count), dropdown of recent 20. No full-history page yet. |
 | Notification preferences (per-method) | 🚧 | Foundry has per-category on/off only, and its `Notification` rows are org-scoped with no `userId` — the §11 baseline needs a schema migration, not an extension. |
 | Notification transactional tier | 📋 | `deliveryClass: "user_pref" \| "transactional"`. Not implemented anywhere. |
-| Outbound webhooks | ✅ | Shipped in Foundry: `WebhookEndpoint`/`WebhookDelivery`, management API + rotate + replay, every-minute worker, 8-attempt backoff, auto-disable. 2026-08-31 (api v3.71.0): delivery claim made atomic (the read-then-update race is fixed) and the §12 warnings shipped — in-app notification at 3 consecutive failures + on auto-disable. Remaining deltas: no dual-signing rotation window on customer endpoints (exists in storefront webhooks, port it), no usage metrics, no `dead_letter` state name. |
-| Activity log | ✅ | Per-org change history with entity-type/id pivot. Actor = `userId`/`userEmail`/`actorType` via AsyncLocalStorage — see §14 Foundry status. |
-| Security audit log | ✅ | `AuditLog` model + `/audit` page live in Foundry; `auth.login`/`auth.logout` written from Clerk session webhooks. Remaining baseline events instrumented incrementally. |
+| Outbound webhooks | ✅ Foundry · ✅ Evident | Shipped in Foundry: `WebhookEndpoint`/`WebhookDelivery`, management API + rotate + replay, every-minute worker, 8-attempt backoff, auto-disable. 2026-08-31 (api v3.71.0): delivery claim made atomic (the read-then-update race is fixed) and the §12 warnings shipped — in-app notification at 3 consecutive failures + on auto-disable. Remaining deltas: no dual-signing rotation window on customer endpoints (exists in storefront webhooks, port it), no usage metrics, no `dead_letter` state name. |
+| Activity log | ✅ Foundry · ✅ Evident | Per-org change history with entity-type/id pivot. Actor = `userId`/`userEmail`/`actorType` via AsyncLocalStorage — see §14 Foundry status. Evident shipped §14 + §14.5 together 2026-09-01 (#220), actor context via `nestjs-cls`. |
+| Security audit log | ✅ Foundry · ✅ Evident | `AuditLog` model + `/audit` page live in Foundry; `auth.login`/`auth.logout` written from Clerk session webhooks. Remaining baseline events instrumented incrementally. Evident live 2026-09-01 (#220): relation-free log tables (an `org.closed` row must survive the org), `auth.login` written at `clerk/sync` rather than from `session.created` — a Clerk session carries no org, so fanning it across a multi-org user's memberships would write a false statement into every other org's log. |
 | API keys | ✅ | `<prefix>_*` prefixed keys, role- or scope-gated, hashed in DB. Foundry adds `keyType` (ADMIN \| STOREFRONT) + channel binding; `expiresAt` settable from the create UI since 2026-08-31 (admin#480: Never/30/90/180/365 days). |
 | Data export | ✅ | `GET /orgs/me/export` returns a ZIP of CSVs. |
 | Right to deletion (GDPR/CCPA) | ✅ | Shipped in Foundry: 30-day grace + 24h immediate path, Clerk-delete-first tombstone, HMAC email audit. Shape differs from spec (state on `User`; no `DataDeletionRequest` model) — see §15.2 Foundry status. |
@@ -323,9 +324,9 @@ The exceptions are **shared libraries** (e.g., `@epic/disposable-emails`, `@epic
 | Rate limiting | 🚧 | Foundry runs a custom in-memory fixed-window limiter (per ECS task): 300/min per ADMIN API key + per-endpoint storefront limits, with `X-RateLimit-*`/`Retry-After` headers. No Redis, no per-IP signup limit, no usage endpoints — see §22 Foundry status. |
 | Health checks | ✅ Foundry | Standard shape shipped 2026-08-31 (api v3.71.0): `checks` object + **503 on DB failure** (LB rotation). Informational sub-checks are config-presence, deliberately not per-probe network calls — the LB hits `/health` every few seconds. |
 | Cron conventions | 🚧 | 26 jobs live via `@nestjs/schedule`; no advisory locks / Redis SETNX anywhere — single-task-safe only. See §17.5 Foundry status. |
-| Plan entitlement gate | 🚧 | §24. Live and correct in Evident; **the 403 has no UI anywhere** so it currently renders as a generic error. Gate was a silent no-op for months before that. |
+| Plan entitlement gate | ✅ Evident · 🚧 elsewhere | §24. Live and correct in Evident, and the §24.4 destination shipped 2026-09-01 (#212): coded `plan_required` / `subscription_expired`, upgrade prompt, locked nav. Gate was a silent no-op for months before that. 🔴 The fix depended on `AllExceptionsFilter` no longer flattening structured error payloads to `{statusCode, message}` — check that before relying on any coded error. |
 | Tenant feature toggles | ✅ Evident | Per-tenant on/off, modelled separately from plan entitlement (§24.1); nav hides disabled groups. |
-| Tenancy: default-deny data layer | ✅ Foundry (burn-in) · 🧭 elsewhere | §25 shipped in Foundry 2026-08-31 (api v3.70.0): Prisma query extension + exhaustive model registry (CI-enforced), `withoutTenantScope(reason, fn)` hatch, raw SQL excluded in writing. Two tiers: predicate-addressed queries hard-fail; id-addressed (verify-then-act) report to Sentry until `TENANCY_GUARD_STRICT`. Prod starts in report mode; flip to enforce after a quiet week. See §25 Foundry status. |
+| Tenancy: default-deny data layer | ✅ Foundry (burn-in) · ✅ Evident (burn-in) · 🧭 elsewhere | §25 shipped in Foundry 2026-08-31 (api v3.70.0): Prisma query extension + exhaustive model registry (CI-enforced), `withoutTenantScope(reason, fn)` hatch, raw SQL excluded in writing. Two tiers: predicate-addressed queries hard-fail; id-addressed (verify-then-act) report to Sentry until `TENANCY_GUARD_STRICT`. Prod starts in report mode; flip to enforce after a quiet week. Evident shipped the second implementation 2026-09-01 (#221): same wiring, but tiered **by model** rather than by environment (10 enforce / 25 report, identical in dev and prod), an unguarded-client hatch instead of an ALS one, and a baseline-file ratchet that fails CI on any new unscoped call site. See §25. |
 | Background-worker test harness | 📋 | §17.5. Required where a job can revoke access, delete data, or move money. Evident's worker has **no jest config and no test script**; the trial-expiry cron lives there. |
 | Custom fields | ✅ | Per-entity custom field defs + values. |
 | Agent access (MCP) | ✅ Foundry · 📋 elsewhere | §26: edge MCP server, per-user org-pinned keys, first-party OAuth + RFC 7591 DCR, directory listings. In production since 2026-07. |
@@ -2727,9 +2728,18 @@ This is a deliberate operational stance: **rate-limit transparently, not silentl
 
 ---
 
-## 25. Tenancy Enforcement ✅ Foundry (burn-in) · 🧭 elsewhere (v3.8 — supersedes "PR review" as the mechanism)
+## 25. Tenancy Enforcement ✅ Foundry (burn-in) · ✅ Evident (burn-in) · 🧭 elsewhere (v3.8 — supersedes "PR review" as the mechanism)
 
 > **Foundry status (2026-08-31, api v3.70.0/v3.71.0): built.** `src/prisma/tenancy/`: a Prisma query extension under every call site (constructor-return wiring; covers interactive-transaction clients — Prisma 6 has no `$use`), an exhaustive model registry whose spec parses `schema.prisma` and fails CI on any unclassified model, `withoutTenantScope(reason, fn)` as the greppable hatch (~30 sites: auth bootstrap, GDPR sweeps, fleet crons, staff tooling — reviewable in one sitting), and raw SQL excluded in writing per property 5. **Two tiers**: predicate-addressed queries hard-fail; row-identity-addressed queries (the verify-then-act idiom, including `findUnique` by bare id) report to Sentry (`tenancy_tier` tag) until `TENANCY_GUARD_STRICT=1` promotes them — the end state is strict, reached by burning down the report list. Modes: enforce everywhere except prod, which starts in `report`; flip after a quiet week. Two implementation lessons for the next app: (1) PrismaPromise is lazy, so an ALS-based hatch must subscribe to the thenable *inside* the ALS scope or the bypass silently fails to apply; (2) static scans get fooled by tenant-path words in `include:` — restrict matching to the `where:` block, and treat the prod report-mode burn-in as the real sweep.
+
+> **Evident status (2026-09-01, PR #221): built — the second independent implementation.** `packages/database/src/tenancy/`: the same constructor-return wiring and CI-enforced registry, mounted in both the API and the worker. Two differences worth carrying forward. **(a) The burn-in is tiered by model, not by environment.** Every environment runs identical modes; a model is `enforce` (throws) or `report` (logs at error, allows) based on whether its call sites have been burned down — 10 and 25 respectively at launch, over 35 tenant-scoped models. Property 2 asks for enforcement "in development and in production alike", and a per-model tier keeps that literally true while still allowing a staged rollout; `TENANCY_GUARD=report|enforce` exists as an incident lever, not as an environment setting. **(b) The escape hatch is a separate unguarded client** (`prisma.$allTenants`), not an ALS-scoped callback — which sidesteps Foundry's lesson (1) entirely, because there is no scope for a lazy PrismaPromise to escape. CI requires a `// cross-tenant:` reason above every use and caps the count at 25 (1 use at launch). First production window: zero 5xx, zero `enforce` throws, two `report`-mode `Product.findUnique()` violations — a real unscoped read in the commonest hole shape, logged rather than silently served.
+>
+> **Four facts the first implementation did not record, each of which cost time to learn:**
+>
+> 1. **`include`d relations do not fire the extension.** Prisma resolves an included relation inside the parent query, so a child row read through its parent inherits the parent's scoping — verified, not assumed. This *defines the coverage boundary*: models with no tenant column of their own (16 in Evident — `OrderLineItem`, `PointTransaction`, `Redemption`, …) are covered via `include` and unguarded only when queried **directly by id**. Declare them in a third bucket so the registry spec can tell "deliberately unguarded" from "forgotten".
+> 2. **The offending call site is not recoverable from a stack walk.** Extension callbacks are dispatched across `PrismaPromise.then`, so application frames are gone by the time the guard runs; the deepest available frame is Prisma's own runtime. A helper that walks the stack will point every violation at the guard's own source. Evident shipped one, watched it do exactly that, and deleted it. Log the model, operation and mode, and get the file list from the static scan instead.
+> 3. **Static scanning does work, with two specific traps.** Both produce *false negatives*, which read as coverage: (i) a file that binds `const where = { storeEnvId }` makes the token `where` a scoping name, which then matches the `where:` property key of every other call in that file and clears them all — require the identifier to appear as a **value**, never followed by a colon; (ii) a binding whose initializer is an awaited query result is not a filter — `const account = await prisma.x.findFirst({ where: { storeEnvId } })` must not make a later `update({ where: { id: account.id } })` count as scoped. Give the scanner its own unit tests; Evident's had both bugs inside its first hour and its own tests caught them.
+> 4. **A baseline file turns report mode into a ratchet.** Report mode does not stop the *next* unscoped query being written. Record the known violations per file (167 across 40 files in Evident) and fail CI when a file grows, when a new file appears, **and when a file shrinks without the baseline being re-recorded** — so fixing call sites lowers the floor instead of leaving slack for the next regression.
 
 ### Why this is now its own section
 
@@ -2757,6 +2767,27 @@ Required properties:
 **Implementation direction:** a Prisma client extension is the natural home — it sits under every call site, needs no per-query cooperation, and cannot be forgotten by a new file. A lint rule remains useful as a fast local signal but must not be the primary control: it sees static queries only, and the failures so far have not all been static.
 
 **Postgres RLS remains the long-term hardening layer**, below the application entirely. It is the strongest form of this control and the most work; the client extension is the version that can ship this quarter.
+
+### Promoting a model out of report mode
+
+The burn-in ends one model at a time, and the promotion must be safe to make
+without a person re-reading every call site. The mechanism:
+
+1. Fix the call sites the baseline lists for that model — add the tenant key, or
+   route the query through the escape hatch with a written reason.
+2. Re-record the baseline. The diff should be all deletions; a re-record that
+   *adds* anything means the scan was run against unfixed work.
+3. Flip the model to `enforce` in the registry.
+
+**CI must assert that no unscoped call site targets an `enforce` model.** That
+single check is what makes step 3 safe: a model promoted while a call site still
+lacks its key is a guaranteed production 500, and the assertion turns that from
+something you find out at 3am into something that never merges. A query-shape
+tier (predicate vs id-addressed) cannot give you this as directly, because the
+unit being promoted is not the unit the scanner counts.
+
+New models start at `enforce`. There are no legacy call sites to burn down, and
+starting in `report` is how a temporary state becomes permanent.
 
 ### Until it ships
 
